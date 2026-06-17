@@ -47,7 +47,19 @@ def main():
             asset = SYMBOL_MAP.get(q['symbol'])
             if asset is None:
                 continue
-            price = q['bid'] or q['ask']
+            # Use midprice as a fair-value estimate for both buy and sell decisions.
+            # Fall back to whichever side is available if one is missing.
+            bid = q['bid']
+            ask = q['ask']
+            if bid is not None and ask is not None:
+                price = (bid + ask) / 2.0
+            elif bid is not None:
+                price = bid
+            elif ask is not None:
+                price = ask
+            else:
+                price = None
+
             if price is not None and price > 0:
                 prices[asset] = price
                 fetched.add(asset)
