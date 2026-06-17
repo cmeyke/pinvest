@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import math
 
 def get_float_input(prompt: str) -> float:
