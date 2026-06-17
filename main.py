@@ -64,14 +64,14 @@ def main():
     current_values = {asset: current_shares[asset] * prices[asset] for asset in strategy}
     total_current_value = sum(current_values.values())
 
-    if total_current_value <= 0:
-        print("Error: Total portfolio value must be greater than zero.")
-        return
-
     # =========================================================================
     # MODE A: PURE REBALANCE AUDIT (Cash Input = 0)
     # =========================================================================
     if lump_sum == 0:
+        if total_current_value <= 0:
+            print("Error: Cannot rebalance — portfolio has no value.")
+            return
+
         print(f"\n================================================================================")
         print(f"RUNNING REBALANCE AUDIT (Total Portfolio Value: €{total_current_value:,.2f})")
         print(f"================================================================================")
