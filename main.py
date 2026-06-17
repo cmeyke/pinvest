@@ -116,15 +116,42 @@ def main():
             print("\n[!] ALERT: One or more asset classes have breached the 20% relative tolerance bands.")
             print("Required trades to return portfolio to perfect target allocation:")
             print("=" * 60)
-            
+
+            # Phase 1: Compute buy orders with floor rounding and total cash required.
+            buy_orders = []       # (asset, shares, actual_cash, theoretical_diff)
+            total_cash_needed = 0.0
+            sell_targets = []     # (asset, excess_eur, price)
+
             for asset, eur_diff in target_discrepancies.items():
                 price = prices[asset]
                 if eur_diff > 0:
-                    shares_to_buy = math.floor(eur_diff / price)
-                    print(f"  -> BUY  {asset:<12} : ~{shares_to_buy:<4} shares (Targeting +€{eur_diff:,.2f})")
+                    shares = math.floor(eur_diff / price)
+                    cash = shares * price
+                    buy_orders.append((asset, shares, cash, eur_diff))
+                    total_cash_needed += cash
                 elif eur_diff < 0:
-                    shares_to_sell = math.ceil(abs(eur_diff) / price)
-                    print(f"  -> SELL {asset:<12} : ~{shares_to_sell:<4} shares (Targeting -€{abs(eur_diff):,.2f})")
+                    sell_targets.append((asset, abs(eur_diff), price))
+
+            # Phase 2: Sell just enough overweight assets to fund the buys.
+            # Allocate proportionally when multiple assets are overweight.
+            if sell_targets and total_cash_needed > 0:
+                total_excess = sum(excess for _, excess, _ in sell_targets)
+                remaining = total_cash_needed
+
+                for asset, excess, price in sell_targets:
+                    if remaining <= 0:
+                        break
+                    proportion = excess / total_excess
+                    target_cash = min(proportion * total_cash_needed, excess)
+                    shares = math.ceil(target_cash / price)
+                    actual_cash = shares * price
+                    remaining -= actual_cash
+                    print(f"  -> SELL {asset:<12} : ~{shares:<4} shares (Raising €{actual_cash:,.2f})")
+
+            # Phase 3: Print buy orders.
+            for asset, shares, cash, eur_diff in buy_orders:
+                print(f"  -> BUY  {asset:<12} : ~{shares:<4} shares (Cost: €{cash:,.2f})")
+
             print("=" * 60)
             print("Note: Execute sales first to generate the liquidity before placing buy orders.")
         else:
