@@ -1,4 +1,5 @@
 import math
+from ib import fetch_quotes, Stock
 
 def get_float_input(prompt: str) -> float:
     while True:
@@ -12,6 +13,10 @@ def get_float_input(prompt: str) -> float:
             print("Invalid input. Please enter a number.")
 
 def main():
+    # ── Contract → asset-class mapping ──────────────────────────────
+    SYMBOL_MAP = {'SPYY': 'Equity', 'XGLE': 'Bonds', 'EWG2': 'Gold'}
+    CONTRACTS  = [Stock(symbol=s, exchange='SMART', currency='EUR',
+                        primaryExchange='IBIS' if s != 'EWG2' else 'SWB') for s in SYMBOL_MAP]
     # Core Strategy Parameters (Targets and 20% Relative Bands)
     strategy = {
         "Equity": {"target": 0.60, "lower": 0.48, "upper": 0.72},
@@ -27,11 +32,30 @@ def main():
     }
 
     print("\n--- 2. CURRENT MARKET PRICES (EUR) ---")
-    prices = {
-        "Equity": get_float_input("Equity ETF share price (€) : "),
-        "Bonds":  get_float_input("Bond ETF share price (€)   : "),
-        "Gold":   get_float_input("Gold ETC share price (€)   : ")
-    }
+    print("🔌 Fetching live quotes from TWS …")
+    try:
+        quotes = fetch_quotes(CONTRACTS)
+    except Exception as e:
+        print(f"❌ TWS connection failed: {e}")
+        print("   Falling back to manual price entry.\n")
+        quotes = []
+
+    prices = {}
+    fetched = set()
+    if quotes:
+        for q in quotes:
+            asset = SYMBOL_MAP.get(q['symbol'])
+            if asset is None:
+                continue
+            price = q['bid'] or q['ask']
+            if price is not None and price > 0:
+                prices[asset] = price
+                fetched.add(asset)
+                print(f"  {asset:<8} ({q['symbol']}): €{price:.2f}")
+
+    for asset in strategy:
+        if asset not in fetched:
+            prices[asset] = get_float_input(f"{asset} share price (€) : ")
 
     print("\n--- 3. INVESTMENT CASH ---")
     lump_sum = get_float_input("Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: ")
