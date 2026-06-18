@@ -77,12 +77,15 @@ def main():
         if asset not in fetched:
             prices[asset] = get_float_input(f"{asset} share price (€) : ")
 
-    print("\n--- 3. INVESTMENT CASH ---")
-    lump_sum = get_float_input("Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: ")
-
-    # Calculate current asset values and total portfolio value
+    # Print current portfolio value before asking for fresh cash
     current_values = {asset: current_shares[asset] * prices[asset] for asset in strategy}
     total_current_value = sum(current_values.values())
+    print(f"\n💰 Current Portfolio Value: €{total_current_value:,.2f}")
+    for asset in strategy:
+        print(f"  {asset:<8}: {current_shares[asset]:.0f} shares × €{prices[asset]:.2f} = €{current_values[asset]:,.2f}")
+
+    print("\n--- 3. INVESTMENT CASH ---")
+    lump_sum = get_float_input("Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: ")
 
     # =========================================================================
     # MODE A: PURE REBALANCE AUDIT (Cash Input = 0)
