@@ -1,16 +1,48 @@
 import math
+import tomllib
+from pathlib import Path
+
 from ib import fetch_quotes, Stock
 
-# ── Strategy Configuration ──────────────────────────────────────────
-SYMBOL_MAP = {'SPYY': 'Equity', 'XGLE': 'Bonds', 'EWG2': 'Gold'}
-CONTRACTS = [Stock(symbol=s, exchange='SMART', currency='EUR',
-                   primaryExchange='IBIS' if s != 'EWG2' else 'SWB') for s in SYMBOL_MAP]
+# ── Hardcoded fallbacks (used when .pinvest is absent) ───────────────
+DEFAULT_VEHICLES = {"Equity": "SPYY", "Bonds": "XGLE", "Gold": "EWG2"}
+PRIMARY_EXCHANGE: dict[str, str] = {"EWG2": "SWB"}  # symbol → exchange override
+DEFAULT_EXCHANGE = "IBIS"
+
+# ── Strategy (investment policy — not user-configurable) ────────────
 STRATEGY = {
     "Equity": {"target": 0.60, "lower": 0.48, "upper": 0.72},
     "Bonds":  {"target": 0.25, "lower": 0.20, "upper": 0.30},
     "Gold":   {"target": 0.15, "lower": 0.12, "upper": 0.18}
 }
 
+
+# ══════════════════════════════════════════════════════════════════════
+#  Config loading
+# ══════════════════════════════════════════════════════════════════════
+
+def load_config() -> dict | None:
+    """Load .pinvest if present; return None when absent or unreadable."""
+    config_path = Path(__file__).parent / ".pinvest"
+    if not config_path.exists():
+        return None
+    try:
+        with open(config_path, "rb") as f:
+            return tomllib.load(f)
+    except Exception:
+        return None
+
+
+def build_contracts(symbols: list[str]) -> list[Stock]:
+    """Build a Stock contract for each symbol."""
+    return [Stock(symbol=s, exchange="SMART", currency="EUR",
+                  primaryExchange=PRIMARY_EXCHANGE.get(s, DEFAULT_EXCHANGE))
+            for s in symbols]
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Input helpers
+# ══════════════════════════════════════════════════════════════════════
 
 def get_float_input(prompt: str) -> float:
     while True:
@@ -44,13 +76,24 @@ def resolve_price(q: dict) -> float | None:
     return None
 
 
-def gather_holdings() -> dict[str, float]:
+def gather_holdings(strategy: dict,
+                    vehicles: dict[str, str],
+                    preloaded: dict[str, float] | None = None
+                    ) -> dict[str, float]:
+    """Prompt for shares; skip assets already supplied via config."""
+    preloaded = preloaded or {}
     print("--- 1. CURRENT PORTFOLIO HOLDINGS ---")
-    return {
-        "Equity": get_float_input("Current Equity ETF shares owned : "),
-        "Bonds":  get_float_input("Current Bond ETF shares owned   : "),
-        "Gold":   get_float_input("Current Gold ETC shares owned   : ")
-    }
+    result: dict[str, float] = {}
+    for asset in strategy:
+        sym = vehicles.get(asset, "?")
+        if asset in preloaded:
+            result[asset] = preloaded[asset]
+            print(f"  {asset:<8}: {preloaded[asset]:.0f} shares of {sym}"
+                  f" (from .pinvest)")
+        else:
+            result[asset] = get_float_input(
+                f"Current {asset} ({sym}) shares owned : ")
+    return result
 
 
 def gather_prices(contracts: list, symbol_map: dict, strategy: dict
@@ -241,8 +284,23 @@ def run_lump_sum(strategy: dict, current_values: dict,
 # ══════════════════════════════════════════════════════════════════════
 
 def main() -> None:
-    shares = gather_holdings()
-    prices = gather_prices(CONTRACTS, SYMBOL_MAP, STRATEGY)
+    config = load_config()
+
+    if config:
+        vehicles = config.get("vehicles", {})
+        symbol_map = {sym: asset for asset, sym in vehicles.items()}
+        contracts = build_contracts(list(symbol_map.keys()))
+
+        preloaded = {asset: float(shares)
+                     for asset, shares in config.get("holdings", {}).items()}
+    else:
+        vehicles = DEFAULT_VEHICLES
+        symbol_map = {sym: asset for asset, sym in vehicles.items()}
+        contracts = build_contracts(list(symbol_map.keys()))
+        preloaded = {}
+
+    shares = gather_holdings(STRATEGY, vehicles, preloaded)
+    prices = gather_prices(contracts, symbol_map, STRATEGY)
     current_values, total_value = print_portfolio_summary(
         STRATEGY, shares, prices)
 

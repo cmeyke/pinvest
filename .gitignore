@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local portfolio config (contains personal holdings)
+.pinvest
