@@ -5,6 +5,11 @@ asset allocation strategy using a **20% relative tolerance band** dynamic.
 It fetches live prices from Interactive Brokers TWS, tracks drift, and
 calculates precision order execution sizes.
 
+> **Disclaimer:** This tool is provided for informational and educational
+> purposes only.  It does **not** constitute financial advice.  All
+> investment decisions and associated risks are solely your own.  Verify
+> every trade independently before placing it with real funds.
+
 ## Strategy Architecture
 
 The script monitors three core asset classes within an institutional-grade
