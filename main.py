@@ -1,6 +1,17 @@
 import math
 from ib import fetch_quotes, Stock
 
+# ── Strategy Configuration ──────────────────────────────────────────
+SYMBOL_MAP = {'SPYY': 'Equity', 'XGLE': 'Bonds', 'EWG2': 'Gold'}
+CONTRACTS = [Stock(symbol=s, exchange='SMART', currency='EUR',
+                   primaryExchange='IBIS' if s != 'EWG2' else 'SWB') for s in SYMBOL_MAP]
+STRATEGY = {
+    "Equity": {"target": 0.60, "lower": 0.48, "upper": 0.72},
+    "Bonds":  {"target": 0.25, "lower": 0.20, "upper": 0.30},
+    "Gold":   {"target": 0.15, "lower": 0.12, "upper": 0.18}
+}
+
+
 def get_float_input(prompt: str) -> float:
     while True:
         try:
@@ -12,205 +23,238 @@ def get_float_input(prompt: str) -> float:
         except ValueError:
             print("Invalid input. Please enter a number.")
 
-def main():
-    # ── Contract → asset-class mapping ──────────────────────────────
-    SYMBOL_MAP = {'SPYY': 'Equity', 'XGLE': 'Bonds', 'EWG2': 'Gold'}
-    CONTRACTS  = [Stock(symbol=s, exchange='SMART', currency='EUR',
-                        primaryExchange='IBIS' if s != 'EWG2' else 'SWB') for s in SYMBOL_MAP]
-    # Core Strategy Parameters (Targets and 20% Relative Bands)
-    strategy = {
-        "Equity": {"target": 0.60, "lower": 0.48, "upper": 0.72},
-        "Bonds":  {"target": 0.25, "lower": 0.20, "upper": 0.30},
-        "Gold":   {"target": 0.15, "lower": 0.12, "upper": 0.18}
-    }
 
+def resolve_price(q: dict) -> float | None:
+    """Best available price using the fallback chain.
+
+    midprice → bid-only → ask-only → last → close → None (manual entry).
+    """
+    bid = q['bid']
+    ask = q['ask']
+    if bid is not None and ask is not None:
+        return (bid + ask) / 2.0
+    if bid is not None:
+        return bid
+    if ask is not None:
+        return ask
+    if q['last'] is not None:
+        return q['last']
+    if q['close'] is not None:
+        return q['close']
+    return None
+
+
+def gather_holdings() -> dict[str, float]:
     print("--- 1. CURRENT PORTFOLIO HOLDINGS ---")
-    current_shares = {
+    return {
         "Equity": get_float_input("Current Equity ETF shares owned : "),
         "Bonds":  get_float_input("Current Bond ETF shares owned   : "),
         "Gold":   get_float_input("Current Gold ETC shares owned   : ")
     }
 
+
+def gather_prices(contracts: list, symbol_map: dict, strategy: dict
+                  ) -> dict[str, float]:
+    """Fetch live quotes from TWS, apply fallback chain, prompt for any missing."""
     print("\n--- 2. CURRENT MARKET PRICES (EUR) ---")
     print("🔌 Fetching live quotes from TWS …")
+
     try:
-        quotes = fetch_quotes(CONTRACTS)
+        quotes = fetch_quotes(contracts)
     except Exception as e:
         print(f"❌ TWS connection failed: {e}")
         print("   Falling back to manual price entry.\n")
         quotes = []
 
-    prices = {}
-    fetched = set()
-    if quotes:
-        for q in quotes:
-            asset = SYMBOL_MAP.get(q['symbol'])
-            if asset is None:
-                continue
-            # Use midprice as a fair-value estimate for both buy and sell decisions.
-            # Fallback chain: midprice → bid-only → ask-only → last → close → manual input.
-            # (last / close are useful when the exchange is closed — bid/ask are absent
-            #  but a recent trade or official close price may still be available.)
-            bid = q['bid']
-            ask = q['ask']
-            last = q['last']
-            close = q['close']
-            if bid is not None and ask is not None:
-                price = (bid + ask) / 2.0
-            elif bid is not None:
-                price = bid
-            elif ask is not None:
-                price = ask
-            elif last is not None:
-                price = last
-            elif close is not None:
-                price = close
-            else:
-                price = None
+    prices: dict[str, float] = {}
+    fetched: set[str] = set()
 
-            if price is not None and price > 0:
-                prices[asset] = price
-                fetched.add(asset)
-                print(f"  {asset:<8} ({q['symbol']}): €{price:.2f}")
+    for q in quotes:
+        asset = symbol_map.get(q['symbol'])
+        if asset is None:
+            continue
+        price = resolve_price(q)
+        if price is not None and price > 0:
+            prices[asset] = price
+            fetched.add(asset)
+            print(f"  {asset:<8} ({q['symbol']}): €{price:.2f}")
 
+    # Prompt manually for any asset missing a price
     for asset in strategy:
         if asset not in fetched:
             prices[asset] = get_float_input(f"{asset} share price (€) : ")
 
-    # Print current portfolio value before asking for fresh cash
-    current_values = {asset: current_shares[asset] * prices[asset] for asset in strategy}
-    total_current_value = sum(current_values.values())
-    print(f"\n💰 Current Portfolio Value: €{total_current_value:,.2f}")
+    return prices
+
+
+def print_portfolio_summary(strategy: dict, shares: dict, prices: dict
+                            ) -> tuple[dict[str, float], float]:
+    """Print portfolio value breakdown; return (current_values, total_value)."""
+    current_values = {a: shares[a] * prices[a] for a in strategy}
+    total = sum(current_values.values())
+
+    print(f"\n💰 Current Portfolio Value: €{total:,.2f}")
+    for a in strategy:
+        print(f"  {a:<8}: {shares[a]:.0f} shares × €{prices[a]:.2f}"
+              f" = €{current_values[a]:,.2f}")
+    return current_values, total
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  MODE A — Rebalance Audit (lump_sum == 0)
+# ══════════════════════════════════════════════════════════════════════
+
+def run_rebalance_audit(strategy: dict, current_values: dict,
+                        total_value: float, prices: dict) -> None:
+    if total_value <= 0:
+        print("Error: Cannot rebalance — portfolio has no value.")
+        return
+
+    print(f"\n{'='*80}")
+    print(f"RUNNING REBALANCE AUDIT (Total Portfolio Value: €{total_value:,.2f})")
+    print(f"{'='*80}")
+    print(f"{'Asset Class':<12} | {'Current €':<12} | {'Current %':<10} | "
+          f"{'Target %':<10} | {'Allowed Band':<14} | {'Status':<10}")
+    print("-" * 82)
+
+    rebalance_triggered = False
+    target_discrepancies: dict[str, float] = {}
+
+    for asset, params in strategy.items():
+        actual_val = current_values[asset]
+        actual_pct = actual_val / total_value
+
+        if actual_pct < params["lower"] or actual_pct > params["upper"]:
+            status = "TRIGGERED"
+            rebalance_triggered = True
+        else:
+            status = "OK"
+
+        ideal_target = total_value * params["target"]
+        target_discrepancies[asset] = ideal_target - actual_val
+
+        print(f"{asset:<12} | €{actual_val:<10,.2f} | {actual_pct*100:<8.2f}% | "
+              f"{params['target']*100:<8.2f}% | "
+              f"{params['lower']*100:.1f}% - {params['upper']*100:.1f}% | {status}")
+
+    print("-" * 82)
+
+    if not rebalance_triggered:
+        print("\n[✓] Portfolio is well within tolerance bands. "
+              "No manual rebalancing actions required.")
+        return
+
+    print("\n[!] ALERT: One or more asset classes have breached the "
+          "20% relative tolerance bands.")
+    print("Required trades to return portfolio to perfect target allocation:")
+    print("=" * 60)
+
+    # Phase 1: Compute buy orders and total cash needed
+    buy_orders: list[tuple[str, int, float, float]] = []
+    total_cash_needed = 0.0
+    sell_targets: list[tuple[str, float, float]] = []
+
+    for asset, eur_diff in target_discrepancies.items():
+        price = prices[asset]
+        if eur_diff > 0:
+            shares = math.floor(eur_diff / price)
+            cash = shares * price
+            buy_orders.append((asset, shares, cash, eur_diff))
+            total_cash_needed += cash
+        elif eur_diff < 0:
+            sell_targets.append((asset, abs(eur_diff), price))
+
+    # Phase 2: Sell proportionally to fund the buys
+    if sell_targets and total_cash_needed > 0:
+        total_excess = sum(excess for _, excess, _ in sell_targets)
+        remaining = total_cash_needed
+
+        for asset, excess, price in sell_targets:
+            if remaining <= 0:
+                break
+            proportion = excess / total_excess
+            target_cash = min(proportion * total_cash_needed, excess)
+            shares = math.ceil(target_cash / price)
+            actual_cash = shares * price
+            remaining -= actual_cash
+            print(f"  -> SELL {asset:<12} : ~{shares:<4} shares "
+                  f"(Raising €{actual_cash:,.2f})")
+
+    # Phase 3: Print buy orders
+    for asset, shares, cash, eur_diff in buy_orders:
+        print(f"  -> BUY  {asset:<12} : ~{shares:<4} shares "
+              f"(Cost: €{cash:,.2f})")
+
+    print("=" * 60)
+    print("Note: Execute sales first to generate the liquidity "
+          "before placing buy orders.")
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  MODE B — Smart Lump-Sum Injection (lump_sum > 0)
+# ══════════════════════════════════════════════════════════════════════
+
+def run_lump_sum(strategy: dict, current_values: dict,
+                 total_value: float, lump_sum: float,
+                 prices: dict) -> None:
+    new_target = total_value + lump_sum
+    print(f"\nExisting Portfolio Value : €{total_value:,.2f}")
+    print(f"Target Post-Investment   : €{new_target:,.2f}")
+
+    # Calculate deficits relative to the new, larger portfolio
+    deficits: dict[str, float] = {}
+    total_deficit = 0.0
+    for asset, params in strategy.items():
+        ideal = new_target * params["target"]
+        deficit = ideal - current_values[asset]
+        deficits[asset] = max(0.0, deficit)
+        total_deficit += deficits[asset]
+
+    # Allocate cash pro-rata based on deficits
+    allocated: dict[str, float] = {}
+    if total_deficit > 0:
+        for asset in strategy:
+            allocated[asset] = (deficits[asset] / total_deficit) * lump_sum
+    else:
+        for asset, params in strategy.items():
+            allocated[asset] = lump_sum * params["target"]
+
+    print("\n" + "=" * 50)
+    print(f"{'ASSET CLASS':<12} | {'CASH TO ROUTE':<15} | {'SHARES TO BUY'}")
+    print("=" * 50)
+
+    leftover = 0.0
     for asset in strategy:
-        print(f"  {asset:<8}: {current_shares[asset]:.0f} shares × €{prices[asset]:.2f} = €{current_values[asset]:,.2f}")
+        cash_for = allocated[asset]
+        price = prices[asset]
+        shares = math.floor(cash_for / price)
+        spent = shares * price
+        leftover += (cash_for - spent)
+        print(f"{asset:<12} | €{cash_for:<13,.2f} | {shares} shares")
+
+    print("=" * 50)
+    print(f"Uninvested leftover cash (due to rounding): €{leftover:.2f}\n")
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Main Orchestrator
+# ══════════════════════════════════════════════════════════════════════
+
+def main() -> None:
+    shares = gather_holdings()
+    prices = gather_prices(CONTRACTS, SYMBOL_MAP, STRATEGY)
+    current_values, total_value = print_portfolio_summary(
+        STRATEGY, shares, prices)
 
     print("\n--- 3. INVESTMENT CASH ---")
-    lump_sum = get_float_input("Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: ")
+    lump_sum = get_float_input(
+        "Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: ")
 
-    # =========================================================================
-    # MODE A: PURE REBALANCE AUDIT (Cash Input = 0)
-    # =========================================================================
     if lump_sum == 0:
-        if total_current_value <= 0:
-            print("Error: Cannot rebalance — portfolio has no value.")
-            return
-
-        print(f"\n================================================================================")
-        print(f"RUNNING REBALANCE AUDIT (Total Portfolio Value: €{total_current_value:,.2f})")
-        print(f"================================================================================")
-        print(f"{'Asset Class':<12} | {'Current €':<12} | {'Current %':<10} | {'Target %':<10} | {'Allowed Band':<14} | {'Status':<10}")
-        print("-" * 82)
-
-        rebalance_triggered = False
-        target_discrepancies = {}
-
-        for asset, params in strategy.items():
-            actual_val = current_values[asset]
-            actual_pct = actual_val / total_current_value
-            
-            # Check if asset drifted outside its 20% relative band
-            if actual_pct < params["lower"] or actual_pct > params["upper"]:
-                status = "TRIGGERED"
-                rebalance_triggered = True
-            else:
-                status = "OK"
-            
-            # Calculate what we *should* own to reset perfectly to target
-            ideal_target_value = total_current_value * params["target"]
-            target_discrepancies[asset] = ideal_target_value - actual_val
-
-            print(f"{asset:<12} | €{actual_val:<10,.2f} | {actual_pct*100:<8.2f}% | {params['target']*100:<8.2f}% | {params['lower']*100:.1f}% - {params['upper']*100:.1f}% | {status}")
-
-        print("-" * 82)
-
-        if rebalance_triggered:
-            print("\n[!] ALERT: One or more asset classes have breached the 20% relative tolerance bands.")
-            print("Required trades to return portfolio to perfect target allocation:")
-            print("=" * 60)
-
-            # Phase 1: Compute buy orders with floor rounding and total cash required.
-            buy_orders = []       # (asset, shares, actual_cash, theoretical_diff)
-            total_cash_needed = 0.0
-            sell_targets = []     # (asset, excess_eur, price)
-
-            for asset, eur_diff in target_discrepancies.items():
-                price = prices[asset]
-                if eur_diff > 0:
-                    shares = math.floor(eur_diff / price)
-                    cash = shares * price
-                    buy_orders.append((asset, shares, cash, eur_diff))
-                    total_cash_needed += cash
-                elif eur_diff < 0:
-                    sell_targets.append((asset, abs(eur_diff), price))
-
-            # Phase 2: Sell just enough overweight assets to fund the buys.
-            # Allocate proportionally when multiple assets are overweight.
-            if sell_targets and total_cash_needed > 0:
-                total_excess = sum(excess for _, excess, _ in sell_targets)
-                remaining = total_cash_needed
-
-                for asset, excess, price in sell_targets:
-                    if remaining <= 0:
-                        break
-                    proportion = excess / total_excess
-                    target_cash = min(proportion * total_cash_needed, excess)
-                    shares = math.ceil(target_cash / price)
-                    actual_cash = shares * price
-                    remaining -= actual_cash
-                    print(f"  -> SELL {asset:<12} : ~{shares:<4} shares (Raising €{actual_cash:,.2f})")
-
-            # Phase 3: Print buy orders.
-            for asset, shares, cash, eur_diff in buy_orders:
-                print(f"  -> BUY  {asset:<12} : ~{shares:<4} shares (Cost: €{cash:,.2f})")
-
-            print("=" * 60)
-            print("Note: Execute sales first to generate the liquidity before placing buy orders.")
-        else:
-            print("\n[✓] Portfolio is well within tolerance bands. No manual rebalancing actions required.")
-
-    # =========================================================================
-    # MODE B: SMART LUMP-SUM INJECTION (Cash Input > 0)
-    # =========================================================================
+        run_rebalance_audit(STRATEGY, current_values, total_value, prices)
     else:
-        new_total_target_value = total_current_value + lump_sum
-        print(f"\nExisting Portfolio Value : €{total_current_value:,.2f}")
-        print(f"Target Post-Investment   : €{new_total_target_value:,.2f}")
+        run_lump_sum(STRATEGY, current_values, total_value, lump_sum, prices)
 
-        # Calculate mathematical deficits (assets underweighted relative to new total)
-        deficits = {}
-        total_deficit = 0
-        for asset, params in strategy.items():
-            ideal_val = new_total_target_value * params["target"]
-            deficit = ideal_val - current_values[asset]
-            deficits[asset] = max(0.0, deficit)  # 0 if already overweight (don't sell)
-            total_deficit += deficits[asset]
-
-        # Allocate cash pro-rata based on deficits
-        allocated_cash = {}
-        if total_deficit > 0:
-            for asset in strategy:
-                allocated_cash[asset] = (deficits[asset] / total_deficit) * lump_sum
-        else:
-            for asset, params in strategy.items():
-                allocated_cash[asset] = lump_sum * params["target"]
-
-        print("\n" + "="*50)
-        print(f"{'ASSET CLASS':<12} | {'CASH TO ROUTE':<15} | {'SHARES TO BUY'}")
-        print("="*50)
-
-        leftover_cash = 0
-        for asset in strategy:
-            cash_for_asset = allocated_cash[asset]
-            price = prices[asset]
-            
-            shares_to_buy = math.floor(cash_for_asset / price)
-            actual_cash_spent = shares_to_buy * price
-            leftover_cash += (cash_for_asset - actual_cash_spent)
-
-            print(f"{asset:<12} | €{cash_for_asset:<13,.2f} | {shares_to_buy} shares")
-
-        print("="*50)
-        print(f"Uninvested leftover cash (due to rounding): €{leftover_cash:.2f}\n")
 
 if __name__ == "__main__":
     main()
