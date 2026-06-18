@@ -48,15 +48,23 @@ def main():
             if asset is None:
                 continue
             # Use midprice as a fair-value estimate for both buy and sell decisions.
-            # Fall back to whichever side is available if one is missing.
+            # Fallback chain: midprice → bid-only → ask-only → last → close → manual input.
+            # (last / close are useful when the exchange is closed — bid/ask are absent
+            #  but a recent trade or official close price may still be available.)
             bid = q['bid']
             ask = q['ask']
+            last = q['last']
+            close = q['close']
             if bid is not None and ask is not None:
                 price = (bid + ask) / 2.0
             elif bid is not None:
                 price = bid
             elif ask is not None:
                 price = ask
+            elif last is not None:
+                price = last
+            elif close is not None:
+                price = close
             else:
                 price = None
 

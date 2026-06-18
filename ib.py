@@ -51,6 +51,8 @@ def fetch_quotes(contracts, *,
         - **bid** (*float | None*) – Best bid price.
         - **ask** (*float | None*) – Best ask price.
         - **last** (*float | None*) – Last trade price.
+        - **close** (*float | None*) – Official close price (useful when
+          the exchange is closed and bid/ask/last are unavailable).
         - **spread_pct** (*float | None*) – Percentage spread
           ``(ask - bid) / ask * 100``, or ``None`` when a spread
           cannot be computed (e.g. one side is missing).
@@ -62,7 +64,7 @@ def fetch_quotes(contracts, *,
 
         quotes = fetch_quotes(contracts)
         prices = {
-            q['symbol']: q['bid'] or q['last'] or 0  # your pricing logic
+            q['symbol']: q['bid'] or q['last'] or q['close'] or 0  # your pricing logic
             for q in quotes
         }
     """
@@ -92,6 +94,7 @@ def fetch_quotes(contracts, *,
             bid = ticker.bid
             ask = ticker.ask
             last = ticker.last
+            close = ticker.close
 
             # Handle locked markets where one side initialises as -1
             if bid > 0 and ask == -1:
@@ -108,6 +111,7 @@ def fetch_quotes(contracts, *,
                 'bid':        bid if bid > 0 else None,
                 'ask':        ask if ask > 0 else None,
                 'last':       last if (last and last > 0) else None,
+                'close':      close if (close and close > 0) else None,
                 'spread_pct': spread_pct,
             })
 
@@ -143,12 +147,14 @@ if __name__ == '__main__':
         bid_s   = f"{q['bid']}"   if q['bid']   is not None else "Awaiting stream"
         ask_s   = f"{q['ask']}"   if q['ask']   is not None else "Awaiting stream"
         last_s  = f"{q['last']}"  if q['last']  is not None else "No recent trades"
+        close_s = f"{q['close']}" if q['close'] is not None else "No close price"
         spr_s   = f"{q['spread_pct']:.4f}%" if q['spread_pct'] is not None else "N/A"
 
         print(f"[{q['symbol']}]")
         print(f"  Bid Price:        {bid_s}")
         print(f"  Ask Price:        {ask_s}")
         print(f"  Last Trade:       {last_s}")
+        print(f"  Close Price:      {close_s}")
         print(f"  🚫 Rel. Spread:     {spr_s}")
         print()
 
