@@ -27,9 +27,12 @@ in `.pinvest` (see below).
 ## Key Features
 
 - **Live Pricing via TWS:** Pulls bid/ask/last/close from Interactive Brokers.
-  Uses midprice as the fair-value estimate with a 6-tier fallback chain
-  (midprice → bid → ask → last → close → manual entry) so you always get
-  a usable price even when the exchange is closed.
+  Uses a 6-tier fallback chain (midprice → bid → ask → last → close → manual
+  entry) so you always get a usable price even when the exchange is closed.
+  Pricing is **leg-aware**: midprice values the portfolio and drives the
+  tolerance-band audit, while order sizing uses the **ask** for buys and the
+  **bid** for sells — so the cash figures reflect what you'll actually pay or
+  receive, not a symmetric fair-value guess.
 - **Dual-Mode Execution:** Alternates automatically between smart cash
   placement and threshold rebalancing based on your inputs.
 - **Smart Lump-Sum Injection (Cash > 0):** Automatically routes fresh

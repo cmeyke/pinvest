@@ -86,6 +86,28 @@ def resolve_price(q: dict) -> float | None:
     return None
 
 
+def resolve_buy_price(q: dict) -> float | None:
+    """Price for sizing BUY orders: you pay the ask.
+
+    Falls back to the fair-value chain (mid → bid → ask → last → close)
+    when no ask is quoted, so a usable price is always returned.
+    """
+    if q['ask'] is not None:
+        return q['ask']
+    return resolve_price(q)
+
+
+def resolve_sell_price(q: dict) -> float | None:
+    """Price for sizing SELL orders: you receive the bid.
+
+    Falls back to the fair-value chain (mid → bid → ask → last → close)
+    when no bid is quoted, so a usable price is always returned.
+    """
+    if q['bid'] is not None:
+        return q['bid']
+    return resolve_price(q)
+
+
 def gather_holdings(strategy: dict,
                     vehicles: dict[str, str],
                     preloaded: dict[str, float] | None = None
@@ -107,8 +129,17 @@ def gather_holdings(strategy: dict,
 
 
 def gather_prices(contracts: list, symbol_map: dict, strategy: dict
-                  ) -> dict[str, float]:
-    """Fetch live quotes from TWS, apply fallback chain, prompt for any missing."""
+                  ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """Fetch live quotes from TWS, apply fallback chain, prompt for any missing.
+
+    Returns three dicts keyed by asset class:
+
+    - **prices** — fair-value (midprice) used for valuation and band-breach.
+    - **buy_prices** — ask-based price for sizing BUY orders.
+    - **sell_prices** — bid-based price for sizing SELL orders.
+
+    For manually entered prices (no live quote) all three are identical.
+    """
     print("\n--- 2. CURRENT MARKET PRICES (EUR) ---")
     print("🔌 Fetching live quotes from TWS …")
 
@@ -120,6 +151,8 @@ def gather_prices(contracts: list, symbol_map: dict, strategy: dict
         quotes = []
 
     prices: dict[str, float] = {}
+    buy_prices: dict[str, float] = {}
+    sell_prices: dict[str, float] = {}
     fetched: set[str] = set()
 
     for q in quotes:
@@ -129,15 +162,22 @@ def gather_prices(contracts: list, symbol_map: dict, strategy: dict
         price = resolve_price(q)
         if price is not None and price > 0:
             prices[asset] = price
+            buy_prices[asset] = resolve_buy_price(q) or price
+            sell_prices[asset] = resolve_sell_price(q) or price
             fetched.add(asset)
-            print(f"  {asset:<8} ({q['symbol']}): €{price:.2f}")
+            spread_note = (f"  (sell €{sell_prices[asset]:.2f} / "
+                           f"buy €{buy_prices[asset]:.2f})")
+            print(f"  {asset:<8} ({q['symbol']}): €{price:.2f}{spread_note}")
 
     # Prompt manually for any asset missing a price
     for asset in strategy:
         if asset not in fetched:
-            prices[asset] = get_float_input(f"{asset} share price (€) : ")
+            entered = get_float_input(f"{asset} share price (€) : ")
+            prices[asset] = entered
+            buy_prices[asset] = entered
+            sell_prices[asset] = entered
 
-    return prices
+    return prices, buy_prices, sell_prices
 
 
 def print_portfolio_summary(strategy: dict, shares: dict, prices: dict
@@ -158,7 +198,8 @@ def print_portfolio_summary(strategy: dict, shares: dict, prices: dict
 # ══════════════════════════════════════════════════════════════════════
 
 def run_rebalance_audit(strategy: dict, current_values: dict,
-                        total_value: float, prices: dict) -> None:
+                        total_value: float, buy_prices: dict,
+                        sell_prices: dict) -> None:
     if total_value <= 0:
         print("Error: Cannot rebalance — portfolio has no value.")
         return
@@ -208,14 +249,14 @@ def run_rebalance_audit(strategy: dict, current_values: dict,
     sell_targets: list[tuple[str, float, float]] = []
 
     for asset, eur_diff in target_discrepancies.items():
-        price = prices[asset]
         if eur_diff > 0:
+            price = buy_prices[asset]
             shares = math.floor(eur_diff / price)
             cash = shares * price
             buy_orders.append((asset, shares, cash, eur_diff))
             total_cash_needed += cash
         elif eur_diff < 0:
-            sell_targets.append((asset, abs(eur_diff), price))
+            sell_targets.append((asset, abs(eur_diff), sell_prices[asset]))
 
     # Phase 2: Sell proportionally to fund the buys
     if sell_targets and total_cash_needed > 0:
@@ -231,12 +272,12 @@ def run_rebalance_audit(strategy: dict, current_values: dict,
             actual_cash = shares * price
             remaining -= actual_cash
             print(f"  -> SELL {asset:<12} : ~{shares:<4} shares "
-                  f"(Raising €{actual_cash:,.2f})")
+                  f"for €{price:.2f}  (Raising €{actual_cash:,.2f})")
 
     # Phase 3: Print buy orders
     for asset, shares, cash, eur_diff in buy_orders:
         print(f"  -> BUY  {asset:<12} : ~{shares:<4} shares "
-              f"(Cost: €{cash:,.2f})")
+              f"for €{buy_prices[asset]:.2f}  (Cost: €{cash:,.2f})")
 
     print("=" * 60)
     print("Note: Execute sales first to generate the liquidity "
@@ -249,7 +290,7 @@ def run_rebalance_audit(strategy: dict, current_values: dict,
 
 def run_lump_sum(strategy: dict, current_values: dict,
                  total_value: float, lump_sum: float,
-                 prices: dict) -> None:
+                 buy_prices: dict) -> None:
     new_target = total_value + lump_sum
     print(f"\nExisting Portfolio Value : €{total_value:,.2f}")
     print(f"Target Post-Investment   : €{new_target:,.2f}")
@@ -279,7 +320,7 @@ def run_lump_sum(strategy: dict, current_values: dict,
     leftover = 0.0
     for asset in strategy:
         cash_for = allocated[asset]
-        price = prices[asset]
+        price = buy_prices[asset]
         shares = math.floor(cash_for / price)
         spent = shares * price
         leftover += (cash_for - spent)
@@ -318,7 +359,7 @@ def main() -> None:
     strategy = build_strategy(targets, band)
 
     shares = gather_holdings(strategy, vehicles, preloaded)
-    prices = gather_prices(contracts, symbol_map, strategy)
+    prices, buy_prices, sell_prices = gather_prices(contracts, symbol_map, strategy)
     current_values, total_value = print_portfolio_summary(
         strategy, shares, prices)
 
@@ -327,9 +368,11 @@ def main() -> None:
         "Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: ")
 
     if lump_sum == 0:
-        run_rebalance_audit(strategy, current_values, total_value, prices)
+        run_rebalance_audit(strategy, current_values, total_value,
+                            buy_prices, sell_prices)
     else:
-        run_lump_sum(strategy, current_values, total_value, lump_sum, prices)
+        run_lump_sum(strategy, current_values, total_value, lump_sum,
+                     buy_prices)
 
 
 if __name__ == "__main__":
