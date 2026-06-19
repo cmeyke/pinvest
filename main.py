@@ -167,6 +167,8 @@ def gather_prices(contracts: list, symbol_map: dict, strategy: dict
             fetched.add(asset)
             spread_note = (f"  (sell €{sell_prices[asset]:.2f} / "
                            f"buy €{buy_prices[asset]:.2f})")
+            if q.get('spread_pct') is not None:
+                spread_note += f"  spread {q['spread_pct']:.4f}%"
             print(f"  {asset:<8} ({q['symbol']}): €{price:.2f}{spread_note}")
 
     # Prompt manually for any asset missing a price
