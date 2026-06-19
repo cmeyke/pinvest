@@ -2,15 +2,24 @@
 # Copy this file to .pinvest and edit to match your portfolio.
 # .pinvest is git-ignored so your holdings stay local.
 
-# Number of shares you currently own per asset class (set to 0 if you hold none)
+# ══ Asset allocation strategy ══
+[strategy]
+band = 0.20                     # 20 % relative tolerance band
+
+[strategy.targets]
+Equity = 0.60                   # fractions must sum to 1.0
+Bonds  = 0.25
+Gold   = 0.15
+
+# ══ Your current holdings ══
 [holdings]
 Equity = 0
-Bonds = 0
-Gold = 0
+Bonds  = 0
+Gold   = 0
 
-# Which ETF / ETC ticker to use for each asset class
-# (change a ticker here only — holdings stay untouched)
+# ══ Vehicles (tickers) ══
+# Change a ticker here only — holdings stay untouched.
 [vehicles]
 Equity = "SPYY"
-Bonds = "XGLE"
-Gold = "EWG2"
+Bonds  = "XGLE"
+Gold   = "EWG2"

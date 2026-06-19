@@ -6,15 +6,10 @@ from ib import fetch_quotes, Stock
 
 # ── Hardcoded fallbacks (used when .pinvest is absent) ───────────────
 DEFAULT_VEHICLES = {"Equity": "SPYY", "Bonds": "XGLE", "Gold": "EWG2"}
+DEFAULT_STRATEGY_TARGETS = {"Equity": 0.60, "Bonds": 0.25, "Gold": 0.15}
+DEFAULT_BAND = 0.20  # 20 % relative tolerance
 PRIMARY_EXCHANGE: dict[str, str] = {"EWG2": "SWB"}  # symbol → exchange override
 DEFAULT_EXCHANGE = "IBIS"
-
-# ── Strategy (investment policy — not user-configurable) ────────────
-STRATEGY = {
-    "Equity": {"target": 0.60, "lower": 0.48, "upper": 0.72},
-    "Bonds":  {"target": 0.25, "lower": 0.20, "upper": 0.30},
-    "Gold":   {"target": 0.15, "lower": 0.12, "upper": 0.18}
-}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -38,6 +33,21 @@ def build_contracts(symbols: list[str]) -> list[Stock]:
     return [Stock(symbol=s, exchange="SMART", currency="EUR",
                   primaryExchange=PRIMARY_EXCHANGE.get(s, DEFAULT_EXCHANGE))
             for s in symbols]
+
+
+def build_strategy(targets: dict[str, float], band: float
+                   ) -> dict[str, dict[str, float]]:
+    """Derive lower / upper trigger bands from targets and a relative band.
+
+    Example: target=0.60 + band=0.20 → lower=0.48, upper=0.72.
+    """
+    total = sum(targets.values())
+    if abs(total - 1.0) > 0.01:
+        print(f"⚠️  Strategy targets sum to {total:.1%}, expected 100%.")
+    return {a: {"target": t,
+                "lower": t * (1.0 - band),
+                "upper": t * (1.0 + band)}
+            for a, t in targets.items()}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -293,25 +303,33 @@ def main() -> None:
 
         preloaded = {asset: float(shares)
                      for asset, shares in config.get("holdings", {}).items()}
+
+        strat_cfg = config.get("strategy", {})
+        targets = strat_cfg.get("targets", DEFAULT_STRATEGY_TARGETS)
+        band = strat_cfg.get("band", DEFAULT_BAND)
     else:
         vehicles = DEFAULT_VEHICLES
         symbol_map = {sym: asset for asset, sym in vehicles.items()}
         contracts = build_contracts(list(symbol_map.keys()))
         preloaded = {}
+        targets = DEFAULT_STRATEGY_TARGETS
+        band = DEFAULT_BAND
 
-    shares = gather_holdings(STRATEGY, vehicles, preloaded)
-    prices = gather_prices(contracts, symbol_map, STRATEGY)
+    strategy = build_strategy(targets, band)
+
+    shares = gather_holdings(strategy, vehicles, preloaded)
+    prices = gather_prices(contracts, symbol_map, strategy)
     current_values, total_value = print_portfolio_summary(
-        STRATEGY, shares, prices)
+        strategy, shares, prices)
 
     print("\n--- 3. INVESTMENT CASH ---")
     lump_sum = get_float_input(
         "Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: ")
 
     if lump_sum == 0:
-        run_rebalance_audit(STRATEGY, current_values, total_value, prices)
+        run_rebalance_audit(strategy, current_values, total_value, prices)
     else:
-        run_lump_sum(STRATEGY, current_values, total_value, lump_sum, prices)
+        run_lump_sum(strategy, current_values, total_value, lump_sum, prices)
 
 
 if __name__ == "__main__":

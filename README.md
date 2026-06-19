@@ -12,8 +12,9 @@ calculates precision order execution sizes.
 
 ## Strategy Architecture
 
-The script monitors three core asset classes within an institutional-grade
-opportunistic framework:
+The default strategy is a **60 / 25 / 15** allocation with a **20%**
+relative tolerance band.  Both the targets and the band are configurable
+in `.pinvest` (see below).
 
 | Asset Class          | Target Allocation | Lower Trigger Band | Upper Trigger Band |
 | :------------------- | :---------------: | :----------------: | :----------------: |
@@ -62,6 +63,14 @@ The only external dependency is `ib-insync`.
 Copy `.pinvest.example` to `.pinvest` and edit to match your portfolio:
 
 ```toml
+[strategy]
+band = 0.20               # 20 % relative tolerance
+
+[strategy.targets]
+Equity = 0.60             # must sum to 1.0
+Bonds  = 0.25
+Gold   = 0.15
+
 [holdings]
 Equity = 150
 Bonds  = 85
@@ -73,14 +82,16 @@ Bonds  = "XGLE"
 Gold   = "EWG2"
 ```
 
+- **`[strategy]`** — target allocations and tolerance band.  Lower and
+  upper trigger bands are derived automatically (target ± band).
 - **`[holdings]`** — number of shares you own per asset class.  Assets
   listed here skip the interactive prompt.
 - **`[vehicles]`** — which ETF / ETC ticker to use for each asset class.
   Change a ticker here only; holdings stay untouched.
 
 `.pinvest` is git-ignored so your personal holdings stay local.  If the
-file is absent the tool falls back to hardcoded defaults (SPYY / XGLE /
-EWG2) and prompts for everything interactively.
+file is absent the tool falls back to hardcoded defaults (60/25/15 with
+20 % band; SPYY / XGLE / EWG2) and prompts for everything interactively.
 
 ---
 

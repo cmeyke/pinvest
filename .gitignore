@@ -11,3 +11,6 @@ wheels/
 
 # Local portfolio config (contains personal holdings)
 .pinvest
+
+# codewhale configs
+.codewhale/
