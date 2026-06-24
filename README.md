@@ -190,9 +190,9 @@ Gold         | €7,263.00    | 26.39%     | 15.00%     | 12.0% - 18.0%  | TRIGG
     tolerance bands.
 Required trades to return portfolio to perfect target allocation:
 ============================================================
-  -> SELL Gold         : ~26   shares (Raising €3,147.30)
-  -> BUY  Equity       : ~6    shares (Cost: €633.00)
-  -> BUY  Bonds        : ~46   shares (Cost: €2,401.20)
+  -> SELL Gold         : ~25   shares for €120.95  (Raising €3,023.75)
+  -> BUY  Equity       : ~6    shares for €105.50  (Cost: €633.00)
+  -> BUY  Bonds        : ~46   shares for €52.20  (Cost: €2,401.20)
 ============================================================
 Note: Execute sales first to generate the liquidity before placing
       buy orders.

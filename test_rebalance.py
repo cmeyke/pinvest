@@ -63,10 +63,13 @@ def test_rebalance_scenario_b_matches_readme():
     assert buy_by_asset["Bonds"]["shares"]  == 46     # floor(2444.25 / 52.20)
     assert buy_by_asset["Bonds"]["cash"]    == pytest.approx(2401.20)
 
-    # SELL orders: ceil(target_cash / sell_price), capped at the asset's excess.
+    # SELL orders: ceil(target_cash / sell_price), then trimmed share-by-
+    # share so the sale never overshoots the asset's excess (would push it
+    # below target). Gold: ceil(3034.20/120.95)=26, but 26×120.95=3144.70
+    # > excess 3134.25, so trimmed to 25 shares raising 3023.75.
     sell_by_asset = {s["asset"]: s for s in r["sell_orders"]}
-    assert sell_by_asset["Gold"]["shares"] == 26      # ceil(~3133.62 / 120.95)
-    assert sell_by_asset["Gold"]["cash"]   == pytest.approx(3144.70)
+    assert sell_by_asset["Gold"]["shares"] == 25
+    assert sell_by_asset["Gold"]["cash"]   == pytest.approx(3023.75)
     assert sell_by_asset["Gold"]["excess"] == pytest.approx(3134.25)
 
     # Totals are consistent with the order lists.
@@ -90,27 +93,67 @@ def test_buy_shares_are_floored_never_rounded_up():
 
 
 def test_sell_shares_are_ceiled_to_raise_at_least_target_cash():
-    """SELL ceiling guarantees we raise at least the target cash amount."""
+    """SELL ceiling guarantees we raise at least the target cash amount,
+    unless trimming is required to avoid overshooting the excess cap —
+    in which case raising slightly less cash is the correct trade-off."""
     cv = {"Equity": 15825.0, "Bonds": 4437.0, "Gold": 7263.0}
     total = sum(cv.values())
     r = compute_rebalance(STRATEGY, cv, total, BUY_PRICES, SELL_PRICES)
     assert r is not None
-    # Each sell raises at least its target_cash (proportion × cash_needed,
-    # capped at excess). With a single sell, target_cash == min(cash_needed,
-    # excess), and ceil ensures shares × price >= that.
+    # Each sell raises a positive amount of cash toward the buys.
     for s in r["sell_orders"]:
         assert s["cash"] > 0
 
 
-# ── Sell sizing is capped at each asset's excess ────────────────────────
+# ── Sell sizing never overshoots the excess ─────────────────────────────
 
-def test_sell_does_not_exceed_available_excess_when_single_sell():
-    """A single sell asset should not be sized beyond its excess."""
+def test_sell_cash_never_exceeds_excess():
+    """Regression: a sell must never raise more cash than the asset's excess.
+
+    Before the trim fix, ceil(target_cash / price) could round up past the
+    excess cap by up to one share's worth of price, pushing an over-target
+    asset *below* its target — the opposite of 'return to perfect target
+    allocation'. The trim loop decrements shares until shares × price ≤
+    excess, so a sell only ever moves an asset from over-target toward
+    target, never past it.
+    """
     cv = {"Equity": 15825.0, "Bonds": 4437.0, "Gold": 7263.0}
     total = sum(cv.values())
     r = compute_rebalance(STRATEGY, cv, total, BUY_PRICES, SELL_PRICES)
     assert r is not None
     for s in r["sell_orders"]:
-        # Cash raised may slightly exceed excess due to ceil rounding, but
-        # the target_cash the algorithm aims for is capped at excess.
-        assert s["excess"] > 0
+        assert s["cash"] <= s["excess"] + 1e-9, (
+            f"{s['asset']} sell raises €{s['cash']:.2f} but excess is only "
+            f"€{s['excess']:.2f} — would push the asset below target."
+        )
+
+
+def test_sell_keeps_asset_at_or_above_target_weight():
+    """After a sell, the asset's post-sell value must still be ≥ its target."""
+    cv = {"Equity": 15825.0, "Bonds": 4437.0, "Gold": 7263.0}
+    total = sum(cv.values())
+    r = compute_rebalance(STRATEGY, cv, total, BUY_PRICES, SELL_PRICES)
+    assert r is not None
+    target_eur_by_asset = {a["asset"]: a["target_eur"] for a in r["assets"]}
+    for s in r["sell_orders"]:
+        post_sell_value = cv[s["asset"]] - s["cash"]
+        assert post_sell_value >= target_eur_by_asset[s["asset"]] - 1e-9, (
+            f"{s['asset']} post-sell value €{post_sell_value:.2f} is below "
+            f"target €{target_eur_by_asset[s['asset']]:.2f}."
+        )
+
+
+@pytest.mark.parametrize("prices", [
+    # Vary the sell price to exercise the trim across price regimes.
+    {"Equity": 105.40, "Bonds": 52.10, "Gold": 120.95},  # README price
+    {"Equity": 105.40, "Bonds": 52.10, "Gold": 121.00},  # round number
+    {"Equity": 105.40, "Bonds": 52.10, "Gold": 119.99},  # just under excess/26
+])
+def test_sell_never_overshoots_across_price_regimes(prices):
+    """The no-overshoot invariant must hold for any sell price."""
+    cv = {"Equity": 15825.0, "Bonds": 4437.0, "Gold": 7263.0}
+    total = sum(cv.values())
+    r = compute_rebalance(STRATEGY, cv, total, BUY_PRICES, prices)
+    assert r is not None
+    for s in r["sell_orders"]:
+        assert s["cash"] <= s["excess"] + 1e-9

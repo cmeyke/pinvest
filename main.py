@@ -290,6 +290,14 @@ def compute_rebalance(strategy: dict, current_values: dict,
             sell_targets.append((asset, abs(eur_diff), sell_prices[asset]))
 
     # Phase 2: Sell proportionally to fund the buys.
+    # Each sell's target_cash is capped at the asset's excess so we never
+    # push an asset below its target weight. ceil() then rounds shares up
+    # to raise at least target_cash — but that can overshoot the cap by up
+    # to one share. Trim back share-by-share until the sale fits within
+    # the excess, so a sell never moves an asset from over-target to
+    # under-target. As a result the sells may raise slightly less cash
+    # than total_cash_needed; the buys are sized independently and the
+    # shortfall stays small (sub-share-of-the-cheapest-sell-asset).
     sell_orders: list[dict] = []
     total_cash_raised = 0.0
     if sell_targets and total_cash_needed > 0:
@@ -301,6 +309,9 @@ def compute_rebalance(strategy: dict, current_values: dict,
             proportion = excess / total_excess
             target_cash = min(proportion * total_cash_needed, excess)
             shares = math.ceil(target_cash / price)
+            # Trim overshoot: never sell more shares than the excess can absorb.
+            while shares > 0 and shares * price > excess:
+                shares -= 1
             cash = shares * price
             remaining -= cash
             total_cash_raised += cash
