@@ -93,3 +93,77 @@ def test_build_strategy_error_message_includes_actual_sum():
     with pytest.raises(ValueError) as excinfo:
         build_strategy({"Equity": 0.50, "Bonds": 0.25, "Gold": 0.15}, 0.20)
     assert "90.0%" in str(excinfo.value)
+
+
+# ── resolve_config: partial-config fallback ─────────────────────────────
+#
+# main() used to call config.get("vehicles", {}) which, for a present
+# .pinvest with no [vehicles] section, returned {} — silently producing
+# an empty symbol_map, no contracts, no fetched prices, and prompts with
+# "?" as the ticker. resolve_config now falls back to DEFAULT_VEHICLES
+# whenever vehicles is missing *or* empty, and similarly for targets.
+
+from main import resolve_config, DEFAULT_VEHICLES, DEFAULT_STRATEGY_TARGETS, DEFAULT_BAND
+
+
+def test_resolve_config_returns_defaults_when_config_is_none():
+    r = resolve_config(None)
+    assert r["vehicles"] == DEFAULT_VEHICLES
+    assert r["preloaded"] == {}
+    assert r["targets"] == DEFAULT_STRATEGY_TARGETS
+    assert r["band"] == DEFAULT_BAND
+
+
+def test_resolve_config_uses_config_values_when_complete():
+    config = {
+        "vehicles": {"Equity": "SPYY", "Bonds": "XGLE", "Gold": "EWG2"},
+        "holdings": {"Equity": 100, "Bonds": 50, "Gold": 25},
+        "strategy": {"band": 0.15, "targets": {"Equity": 0.50, "Bonds": 0.30, "Gold": 0.20}},
+    }
+    r = resolve_config(config)
+    assert r["vehicles"] == {"Equity": "SPYY", "Bonds": "XGLE", "Gold": "EWG2"}
+    assert r["preloaded"] == {"Equity": 100.0, "Bonds": 50.0, "Gold": 25.0}
+    assert r["targets"] == {"Equity": 0.50, "Bonds": 0.30, "Gold": 0.20}
+    assert r["band"] == 0.15
+
+
+def test_resolve_config_falls_back_when_vehicles_section_missing():
+    """A .pinvest with no [vehicles] should use DEFAULT_VEHICLES, not {}."""
+    r = resolve_config({"strategy": {"band": 0.20}})
+    assert r["vehicles"] == DEFAULT_VEHICLES
+
+
+def test_resolve_config_falls_back_when_vehicles_section_empty():
+    """An empty [vehicles] table should also fall back, not produce {}."""
+    r = resolve_config({"vehicles": {}, "strategy": {"band": 0.20}})
+    assert r["vehicles"] == DEFAULT_VEHICLES
+
+
+def test_resolve_config_falls_back_when_targets_missing():
+    """A .pinvest with no [strategy.targets] should use DEFAULT_STRATEGY_TARGETS."""
+    r = resolve_config({"vehicles": {"Equity": "X"}, "strategy": {"band": 0.20}})
+    assert r["targets"] == DEFAULT_STRATEGY_TARGETS
+
+
+def test_resolve_config_falls_back_when_targets_empty():
+    r = resolve_config({"strategy": {"band": 0.20, "targets": {}}})
+    assert r["targets"] == DEFAULT_STRATEGY_TARGETS
+
+
+def test_resolve_config_falls_back_when_band_missing():
+    """A .pinvest with no band should use DEFAULT_BAND."""
+    r = resolve_config({"strategy": {"targets": {"Equity": 0.6, "Bonds": 0.25, "Gold": 0.15}}})
+    assert r["band"] == DEFAULT_BAND
+
+
+def test_resolve_config_preloaded_empty_when_holdings_missing():
+    """No [holdings] section → empty preloaded dict → prompts for all assets."""
+    r = resolve_config({"vehicles": {"Equity": "SPYY"}, "strategy": {"band": 0.20}})
+    assert r["preloaded"] == {}
+
+
+def test_resolve_config_preloaded_converts_values_to_float():
+    """TOML integers must become floats so downstream math stays float."""
+    r = resolve_config({"holdings": {"Equity": 455, "Bonds": 236}})
+    assert r["preloaded"] == {"Equity": 455.0, "Bonds": 236.0}
+    assert all(isinstance(v, float) for v in r["preloaded"].values())

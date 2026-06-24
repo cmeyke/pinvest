@@ -516,28 +516,40 @@ def run_lump_sum(strategy: dict, current_values: dict,
 #  Main Orchestrator
 # ══════════════════════════════════════════════════════════════════════
 
-def main() -> None:
-    config = load_config()
+def resolve_config(config: dict | None) -> dict:
+    """Translate a loaded .pinvest (or None) into the four orchestrator inputs.
 
+    A present-but-incomplete config falls back to the same defaults as an
+    absent one, rather than silently producing empty vehicles/targets and
+    a broken run. Returns a dict with keys: vehicles, preloaded, targets,
+    band.
+    """
     if config:
-        vehicles = config.get("vehicles", {})
-        symbol_map = {sym: asset for asset, sym in vehicles.items()}
-        contracts = build_contracts(list(symbol_map.keys()))
-
+        vehicles = config.get("vehicles") or DEFAULT_VEHICLES
         preloaded = {asset: float(shares)
                      for asset, shares in config.get("holdings", {}).items()}
-
         strat_cfg = config.get("strategy", {})
-        targets = strat_cfg.get("targets", DEFAULT_STRATEGY_TARGETS)
+        targets = strat_cfg.get("targets") or DEFAULT_STRATEGY_TARGETS
         band = strat_cfg.get("band", DEFAULT_BAND)
     else:
         vehicles = DEFAULT_VEHICLES
-        symbol_map = {sym: asset for asset, sym in vehicles.items()}
-        contracts = build_contracts(list(symbol_map.keys()))
         preloaded = {}
         targets = DEFAULT_STRATEGY_TARGETS
         band = DEFAULT_BAND
+    return {"vehicles": vehicles, "preloaded": preloaded,
+            "targets": targets, "band": band}
 
+
+def main() -> None:
+    cfg = resolve_config(load_config())
+    vehicles = cfg["vehicles"]
+    preloaded = cfg["preloaded"]
+    targets = cfg["targets"]
+    band = cfg["band"]
+
+    # Common plumbing — identical regardless of whether config was used.
+    symbol_map = {sym: asset for asset, sym in vehicles.items()}
+    contracts = build_contracts(list(symbol_map.keys()))
     strategy = build_strategy(targets, band)
 
     shares = gather_holdings(strategy, vehicles, preloaded)
