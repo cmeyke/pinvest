@@ -57,7 +57,18 @@ in `.pinvest` (see below).
 uv sync
 ```
 
-The only external dependency is `ib-insync`.
+The only runtime dependency is `ib-insync`.
+
+### Tests
+
+Install the dev dependencies (adds `pytest`) and run the suite:
+
+```bash
+uv sync --extra dev
+uv run pytest
+```
+
+Tests use isolated temp directories and never touch your real `.pinvest`.
 
 ---
 

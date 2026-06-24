@@ -18,9 +18,9 @@ DEFAULT_EXCHANGE = "IBIS"
 #  Config loading
 # ══════════════════════════════════════════════════════════════════════
 
-def load_config() -> dict | None:
+def load_config(path: Path | None = None) -> dict | None:
     """Load .pinvest if present; return None when absent or unreadable."""
-    config_path = Path(__file__).parent / ".pinvest"
+    config_path = path or Path(__file__).parent / ".pinvest"
     if not config_path.exists():
         return None
     try:
