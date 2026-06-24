@@ -57,15 +57,17 @@ def test_rebalance_scenario_b_matches_readme():
     assert disc_by_asset["Gold"]   == pytest.approx(-3134.25)   # overweight
 
     # BUY orders: originally floor(discrepancy / buy_price), then re-sized
-    # by Phase 3 to fit the cash actually raised by sells. Gold's trimmed
-    # sell raised €3,023.75, short of the original €3,034.20 buy total by
-    # €10.45. Phase 3 walks the buys in order: Equity keeps all 6 shares
-    # (€633), Bonds drops 46→45 (€2,349) to fit the budget.
+    # by Phase 3 to fit the cash actually raised by sells. Phase 3 walks
+    # buys in *discrepancy-descending* order (most underweight first), so
+    # Bonds (discrepancy €2,444.25) is funded before Equity (€690).
+    # Gold's trimmed sell raised €3,023.75, short of the original €3,034.20
+    # buy total by €10.45. Bonds keeps all 46 shares (€2,401.20); Equity
+    # drops 6→5 (€527.50) to fit the remaining €622.55 budget.
     buy_by_asset = {b["asset"]: b for b in r["buy_orders"]}
-    assert buy_by_asset["Equity"]["shares"] == 6
-    assert buy_by_asset["Equity"]["cash"]   == pytest.approx(633.0)
-    assert buy_by_asset["Bonds"]["shares"]  == 45
-    assert buy_by_asset["Bonds"]["cash"]    == pytest.approx(2349.0)
+    assert buy_by_asset["Bonds"]["shares"]  == 46
+    assert buy_by_asset["Bonds"]["cash"]    == pytest.approx(2401.20)
+    assert buy_by_asset["Equity"]["shares"] == 5
+    assert buy_by_asset["Equity"]["cash"]   == pytest.approx(527.50)
 
     # SELL orders: ceil(target_cash / sell_price), then trimmed share-by-
     # share so the sale never overshoots the asset's excess (would push it
@@ -224,14 +226,78 @@ def test_phase3_does_not_leave_unneeded_cash_idle_when_buys_can_fill():
 
     A naive proportional scale floors each buy independently and can leave
     significant cash idle (e.g. €147 uninvested on the README scenario).
-    The greedy allocator walks buys in order, spending up to each buy's
-    original floored max, so uninvested cash stays under one share of the
-    last buy asset — not a multiple of every buy's rounding error.
+    The greedy allocator walks buys in discrepancy-descending order,
+    spending up to each buy's original floored max, so uninvested cash
+    stays under one share of the *last* buy asset in that order — not a
+    multiple of every buy's rounding error. With discrepancy-descending
+    order on the README scenario, the last buy is Equity (€105.50).
     """
     cv = {"Equity": 15825.0, "Bonds": 4437.0, "Gold": 7263.0}
     total = sum(cv.values())
     r = compute_rebalance(STRATEGY, cv, total, BUY_PRICES, SELL_PRICES)
     assert r is not None
     uninvested = r["total_cash_raised"] - r["total_cash_needed"]
-    # Bounded by the price of one share of the last buy asset (Bonds €52.20).
-    assert uninvested < BUY_PRICES["Bonds"]
+    # Bounded by the price of one share of the last buy asset in
+    # discrepancy-descending order (Equity €105.50, since Equity has the
+    # smaller €690 discrepancy vs Bonds €2,444.25).
+    assert uninvested < BUY_PRICES["Equity"]
+
+
+# ── Phase 3 prioritizes the most underweight asset ──────────────────────
+
+def test_phase3_funds_most_underweight_asset_first_when_cash_is_tight():
+    """Prioritizing the largest-EUR-shortfall asset eliminates breaches
+    that a strategy-order walk would leave in place.
+
+    Scenario: Equity is slightly underweight (small EUR shortfall, cheap,
+    listed first in strategy); Bonds is heavily underweight (large EUR
+    shortfall, expensive, sitting below its lower band). The trimmed sell
+    raises a tight budget that can't fully fund both buys. Phase 3 must
+    fund Bonds first — lifting it to its 20% lower band — at the cost of
+    Equity, which is well within its 48-72% band and tolerates the trim.
+
+    A strategy-order walk would fully fund Equity (reaching its 60%
+    target exactly) and leave Bonds at 14.5%, in breach of its 20% lower
+    band. Discrepancy-descending order produces zero breaches instead of
+    one, and lower total deviation from targets.
+    """
+    cv = {"Equity": 12000.0, "Bonds": 2000.0, "Gold": 8000.0}
+    total = sum(cv.values())  # €22,000
+    buy_prices  = {"Equity": 100.0, "Bonds": 300.0, "Gold": 2500.0}
+    sell_prices = {"Equity": 99.0,  "Bonds": 299.0, "Gold": 2500.0}
+    r = compute_rebalance(STRATEGY, cv, total, buy_prices, sell_prices)
+    assert r is not None
+
+    # Bonds (discrepancy €3,500) is funded before Equity (discrepancy €1,200).
+    buy_by_asset = {b["asset"]: b for b in r["buy_orders"]}
+    assert buy_by_asset["Bonds"]["shares"] == 8    # €2,400 → lifts to 20.0%
+    assert buy_by_asset["Equity"]["shares"] == 1   # €100 → 55.0%, still in band
+
+    # No asset ends below its lower band.
+    for a in r["assets"]:
+        post_buy_value = (cv[a["asset"]]
+                          + buy_by_asset.get(a["asset"], {"cash": 0.0})["cash"])
+        post_buy_pct = post_buy_value / total
+        assert post_buy_pct >= a["lower_pct"] - 1e-9, (
+            f"{a['asset']} post-buy weight {post_buy_pct*100:.1f}% is below "
+            f"its {a['lower_pct']*100:.0f}% lower band."
+        )
+
+    # And the order list is still executable as-is.
+    assert r["total_cash_needed"] <= r["total_cash_raised"] + 1e-9
+
+
+def test_phase3_buy_order_is_discrepancy_descending():
+    """When Phase 3 trims, buy_orders must be sorted largest-shortfall first.
+
+    This pins the ordering policy explicitly so a future refactor that
+    silently switches back to strategy-order would fail loudly.
+    """
+    cv = {"Equity": 12000.0, "Bonds": 2000.0, "Gold": 8000.0}
+    total = sum(cv.values())
+    buy_prices  = {"Equity": 100.0, "Bonds": 300.0, "Gold": 2500.0}
+    sell_prices = {"Equity": 99.0,  "Bonds": 299.0, "Gold": 2500.0}
+    r = compute_rebalance(STRATEGY, cv, total, buy_prices, sell_prices)
+    assert r is not None
+    discrepancies = [b["discrepancy"] for b in r["buy_orders"]]
+    assert discrepancies == sorted(discrepancies, reverse=True)

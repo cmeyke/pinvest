@@ -329,15 +329,27 @@ def compute_rebalance(strategy: dict, current_values: dict,
 
     # Phase 3: Re-size buys to fit the cash actually raised.
     # Sells may raise less than total_cash_needed (see Phase 2 note). Walk
-    # the buy list in order, spending the remaining cash on each buy up to
-    # its original floored share count, so the printed order list is
-    # always executable as-is (sum(buy cash) ≤ sum(sell cash)) and we
-    # don't leave cash idle the way a naive proportional scale would.
+    # the buy list in *discrepancy-descending* order — most underweight
+    # asset first — spending the remaining cash on each buy up to its
+    # original floored share count. Two properties fall out of this:
+    #
+    #   1. The printed order list is always executable as-is
+    #      (sum(buy cash) ≤ sum(sell cash)) and we don't leave cash idle
+    #      the way a naive proportional scale would.
+    #
+    #   2. When cash is tight, the most underweight asset gets priority.
+    #      Funding the largest-EUR-shortfall asset first minimizes the
+    #      worst-case deviation and can eliminate band breaches that a
+    #      strategy-order walk would leave in place — e.g. an asset
+    #      sitting below its lower band gets lifted to the band edge
+    #      before cash is spent perfecting a near-target asset.
+    #
     # Bought assets may end up further below target than the ideal
     # floor(discrepancy / price), but they were under-target already —
     # no new band breach is created, and the user is never asked to
     # come up with extra cash.
     if total_cash_needed > 0 and total_cash_raised < total_cash_needed:
+        buy_orders.sort(key=lambda b: b["discrepancy"], reverse=True)
         budget = total_cash_raised
         for b in buy_orders:
             price = buy_prices[b["asset"]]
