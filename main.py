@@ -2,7 +2,9 @@ import math
 import tomllib
 from pathlib import Path
 
-from ib import fetch_quotes, Stock
+from ib_insync import Stock
+
+from ib import fetch_quotes
 
 # ── Hardcoded fallbacks (used when .pinvest is absent) ───────────────
 DEFAULT_VEHICLES = {"Equity": "SPYY", "Bonds": "XGLE", "Gold": "EWG2"}
