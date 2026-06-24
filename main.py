@@ -295,9 +295,14 @@ def compute_rebalance(strategy: dict, current_values: dict,
     # to raise at least target_cash — but that can overshoot the cap by up
     # to one share. Trim back share-by-share until the sale fits within
     # the excess, so a sell never moves an asset from over-target to
-    # under-target. As a result the sells may raise slightly less cash
-    # than total_cash_needed; the buys are sized independently and the
-    # shortfall stays small (sub-share-of-the-cheapest-sell-asset).
+    # under-target.
+    #
+    # Trimming can undershoot target_cash — sometimes by a full share,
+    # which is significant when the sell asset is expensive (e.g. trim
+    # from 2 × €2,500 to 1 × €2,500 drops €2,500 of cash). When that
+    # happens the buys as originally sized would cost more than the sells
+    # raised, producing an unexecutable order list. Phase 3 below closes
+    # that gap by re-sizing the buys to fit the cash actually raised.
     sell_orders: list[dict] = []
     total_cash_raised = 0.0
     if sell_targets and total_cash_needed > 0:
@@ -321,6 +326,27 @@ def compute_rebalance(strategy: dict, current_values: dict,
                 "cash":   cash,
                 "excess": excess,
             })
+
+    # Phase 3: Re-size buys to fit the cash actually raised.
+    # Sells may raise less than total_cash_needed (see Phase 2 note). Walk
+    # the buy list in order, spending the remaining cash on each buy up to
+    # its original floored share count, so the printed order list is
+    # always executable as-is (sum(buy cash) ≤ sum(sell cash)) and we
+    # don't leave cash idle the way a naive proportional scale would.
+    # Bought assets may end up further below target than the ideal
+    # floor(discrepancy / price), but they were under-target already —
+    # no new band breach is created, and the user is never asked to
+    # come up with extra cash.
+    if total_cash_needed > 0 and total_cash_raised < total_cash_needed:
+        budget = total_cash_raised
+        for b in buy_orders:
+            price = buy_prices[b["asset"]]
+            max_shares = b["shares"]  # original floor(discrepancy / price)
+            affordable = math.floor(budget / price)
+            b["shares"] = min(max_shares, affordable)
+            b["cash"] = b["shares"] * price
+            budget -= b["cash"]
+        total_cash_needed = sum(b["cash"] for b in buy_orders)
 
     return {
         "assets":            assets,

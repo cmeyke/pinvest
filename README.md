@@ -192,7 +192,7 @@ Required trades to return portfolio to perfect target allocation:
 ============================================================
   -> SELL Gold         : ~25   shares for €120.95  (Raising €3,023.75)
   -> BUY  Equity       : ~6    shares for €105.50  (Cost: €633.00)
-  -> BUY  Bonds        : ~46   shares for €52.20  (Cost: €2,401.20)
+  -> BUY  Bonds        : ~45   shares for €52.20  (Cost: €2,349.00)
 ============================================================
 Note: Execute sales first to generate the liquidity before placing
       buy orders.

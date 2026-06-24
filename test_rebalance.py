@@ -56,12 +56,16 @@ def test_rebalance_scenario_b_matches_readme():
     assert disc_by_asset["Bonds"]  == pytest.approx(2444.25)    # underweight
     assert disc_by_asset["Gold"]   == pytest.approx(-3134.25)   # overweight
 
-    # BUY orders: floor(discrepancy / buy_price) shares.
+    # BUY orders: originally floor(discrepancy / buy_price), then re-sized
+    # by Phase 3 to fit the cash actually raised by sells. Gold's trimmed
+    # sell raised €3,023.75, short of the original €3,034.20 buy total by
+    # €10.45. Phase 3 walks the buys in order: Equity keeps all 6 shares
+    # (€633), Bonds drops 46→45 (€2,349) to fit the budget.
     buy_by_asset = {b["asset"]: b for b in r["buy_orders"]}
-    assert buy_by_asset["Equity"]["shares"] == 6      # floor(690 / 105.50)
+    assert buy_by_asset["Equity"]["shares"] == 6
     assert buy_by_asset["Equity"]["cash"]   == pytest.approx(633.0)
-    assert buy_by_asset["Bonds"]["shares"]  == 46     # floor(2444.25 / 52.20)
-    assert buy_by_asset["Bonds"]["cash"]    == pytest.approx(2401.20)
+    assert buy_by_asset["Bonds"]["shares"]  == 45
+    assert buy_by_asset["Bonds"]["cash"]    == pytest.approx(2349.0)
 
     # SELL orders: ceil(target_cash / sell_price), then trimmed share-by-
     # share so the sale never overshoots the asset's excess (would push it
@@ -157,3 +161,77 @@ def test_sell_never_overshoots_across_price_regimes(prices):
     assert r is not None
     for s in r["sell_orders"]:
         assert s["cash"] <= s["excess"] + 1e-9
+
+
+# ── Phase 3: buys always fit the cash actually raised ──────────────────
+
+def test_buy_total_never_exceeds_cash_raised():
+    """The order list must be executable as printed: sum(buys) ≤ sum(sells).
+
+    Before Phase 3, a sell trim could leave the buys costing more than
+    the sells raised — the user would have to come up with extra cash or
+    manually trim the buys. Phase 3 re-sizes the buys so the printed list
+    is always executable as-is.
+    """
+    cv = {"Equity": 15825.0, "Bonds": 4437.0, "Gold": 7263.0}
+    total = sum(cv.values())
+    r = compute_rebalance(STRATEGY, cv, total, BUY_PRICES, SELL_PRICES)
+    assert r is not None
+    assert r["total_cash_needed"] <= r["total_cash_raised"] + 1e-9
+
+
+def test_buy_total_fits_cash_raised_with_expensive_sell_share():
+    """Regression for the case that motivated Phase 3.
+
+    An expensive sell asset (€2,500/share) with €4,000 excess: trim drops
+    the sell from 2 shares (€5,000, overshoot) to 1 share (€2,500),
+    raising €2,500 less than the buys originally needed. Without Phase 3
+    the printed buys would cost ~€4,500 — unexecutable. Phase 3 must
+    re-size the buys to fit the €2,500 actually raised.
+    """
+    cv = {"Equity": 6000.0, "Bonds": 3000.0, "Gold": 10000.0}
+    total = sum(cv.values())  # €19,000
+    buy_prices  = {"Equity": 100.0, "Bonds": 100.0, "Gold": 2500.0}
+    sell_prices = {"Equity": 99.0,  "Bonds": 99.0,  "Gold": 2500.0}
+    r = compute_rebalance(STRATEGY, cv, total, buy_prices, sell_prices)
+    assert r is not None
+    assert r["total_cash_needed"] <= r["total_cash_raised"] + 1e-9
+    # And each individual buy is internally consistent.
+    for b in r["buy_orders"]:
+        assert b["cash"] == b["shares"] * buy_prices[b["asset"]]
+
+
+@pytest.mark.parametrize("sell_prices", [
+    {"Equity": 105.40, "Bonds": 52.10, "Gold": 120.95},   # README
+    {"Equity": 105.40, "Bonds": 52.10, "Gold": 2500.00},  # expensive Gold
+    {"Equity": 105.40, "Bonds": 52.10, "Gold": 5000.00},  # very expensive
+    {"Equity": 105.40, "Bonds": 52.10, "Gold": 0.01},     # pathological low
+])
+def test_order_list_always_executable_across_price_regimes(sell_prices):
+    """sum(buy cash) ≤ sum(sell cash) must hold for any sell price."""
+    cv = {"Equity": 15825.0, "Bonds": 4437.0, "Gold": 7263.0}
+    total = sum(cv.values())
+    r = compute_rebalance(STRATEGY, cv, total, BUY_PRICES, sell_prices)
+    assert r is not None
+    assert r["total_cash_needed"] <= r["total_cash_raised"] + 1e-9, (
+        f"buys cost €{r['total_cash_needed']:.2f} but sells only raised "
+        f"€{r['total_cash_raised']:.2f} — order list is unexecutable."
+    )
+
+
+def test_phase3_does_not_leave_unneeded_cash_idle_when_buys_can_fill():
+    """Phase 3 should spend as much of the raised cash as the buys can absorb.
+
+    A naive proportional scale floors each buy independently and can leave
+    significant cash idle (e.g. €147 uninvested on the README scenario).
+    The greedy allocator walks buys in order, spending up to each buy's
+    original floored max, so uninvested cash stays under one share of the
+    last buy asset — not a multiple of every buy's rounding error.
+    """
+    cv = {"Equity": 15825.0, "Bonds": 4437.0, "Gold": 7263.0}
+    total = sum(cv.values())
+    r = compute_rebalance(STRATEGY, cv, total, BUY_PRICES, SELL_PRICES)
+    assert r is not None
+    uninvested = r["total_cash_raised"] - r["total_cash_needed"]
+    # Bounded by the price of one share of the last buy asset (Bonds €52.20).
+    assert uninvested < BUY_PRICES["Bonds"]
