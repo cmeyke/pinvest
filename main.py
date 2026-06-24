@@ -38,10 +38,19 @@ def load_config(path: Path | None = None) -> dict | None:
         return None
 
 
-def build_contracts(symbols: list[str]) -> list[Stock]:
-    """Build a Stock contract for each symbol."""
+def build_contracts(symbols: list[str],
+                    primary_exchanges: dict[str, str] | None = None
+                    ) -> list[Stock]:
+    """Build a Stock contract for each symbol.
+
+    ``primary_exchanges`` maps symbol → non-default primary exchange
+    (e.g. ``{"EWG2": "SWB"}``). Symbols not in the map use
+    ``DEFAULT_EXCHANGE``. Defaults to the hardcoded ``PRIMARY_EXCHANGE``
+    overrides used by ``DEFAULT_VEHICLES`` when .pinvest is absent.
+    """
+    overrides = primary_exchanges if primary_exchanges is not None else PRIMARY_EXCHANGE
     return [Stock(symbol=s, exchange="SMART", currency="EUR",
-                  primaryExchange=PRIMARY_EXCHANGE.get(s, DEFAULT_EXCHANGE))
+                  primaryExchange=overrides.get(s, DEFAULT_EXCHANGE))
             for s in symbols]
 
 
@@ -516,28 +525,62 @@ def run_lump_sum(strategy: dict, current_values: dict,
 #  Main Orchestrator
 # ══════════════════════════════════════════════════════════════════════
 
+def parse_vehicles(raw: dict) -> tuple[dict[str, str], dict[str, str]]:
+    """Parse a ``[vehicles]`` table into (vehicles, primary_exchanges).
+
+    Each entry may be either:
+
+    - a string — ``Equity = "SPYY"`` — uses ``DEFAULT_EXCHANGE``.
+    - a table — ``Equity = {symbol = "SPYY", primary_exchange = "SWB"}`` —
+      with an explicit exchange override. The ``primary_exchange`` key is
+      optional; omitting it falls back to ``DEFAULT_EXCHANGE``.
+
+    Returns the canonical ``{asset: symbol}`` vehicles dict and a
+    ``{symbol: exchange}`` overrides map for ``build_contracts``.
+    """
+    vehicles: dict[str, str] = {}
+    primary_exchanges: dict[str, str] = {}
+    for asset, spec in raw.items():
+        if isinstance(spec, str):
+            vehicles[asset] = spec
+        elif isinstance(spec, dict):
+            symbol = spec.get("symbol")
+            if not symbol:
+                continue  # malformed entry; skip rather than blow up
+            vehicles[asset] = symbol
+            exch = spec.get("primary_exchange")
+            if exch:
+                primary_exchanges[symbol] = exch
+    return vehicles, primary_exchanges
+
+
 def resolve_config(config: dict | None) -> dict:
-    """Translate a loaded .pinvest (or None) into the four orchestrator inputs.
+    """Translate a loaded .pinvest (or None) into the orchestrator inputs.
 
     A present-but-incomplete config falls back to the same defaults as an
     absent one, rather than silently producing empty vehicles/targets and
     a broken run. Returns a dict with keys: vehicles, preloaded, targets,
-    band.
+    band, primary_exchanges.
     """
     if config:
-        vehicles = config.get("vehicles") or DEFAULT_VEHICLES
+        raw_vehicles = config.get("vehicles")
+        if raw_vehicles:
+            vehicles, primary_exchanges = parse_vehicles(raw_vehicles)
+        else:
+            vehicles, primary_exchanges = DEFAULT_VEHICLES, PRIMARY_EXCHANGE
         preloaded = {asset: float(shares)
                      for asset, shares in config.get("holdings", {}).items()}
         strat_cfg = config.get("strategy", {})
         targets = strat_cfg.get("targets") or DEFAULT_STRATEGY_TARGETS
         band = strat_cfg.get("band", DEFAULT_BAND)
     else:
-        vehicles = DEFAULT_VEHICLES
+        vehicles, primary_exchanges = DEFAULT_VEHICLES, PRIMARY_EXCHANGE
         preloaded = {}
         targets = DEFAULT_STRATEGY_TARGETS
         band = DEFAULT_BAND
     return {"vehicles": vehicles, "preloaded": preloaded,
-            "targets": targets, "band": band}
+            "targets": targets, "band": band,
+            "primary_exchanges": primary_exchanges}
 
 
 def main() -> None:
@@ -546,10 +589,11 @@ def main() -> None:
     preloaded = cfg["preloaded"]
     targets = cfg["targets"]
     band = cfg["band"]
+    primary_exchanges = cfg["primary_exchanges"]
 
     # Common plumbing — identical regardless of whether config was used.
     symbol_map = {sym: asset for asset, sym in vehicles.items()}
-    contracts = build_contracts(list(symbol_map.keys()))
+    contracts = build_contracts(list(symbol_map.keys()), primary_exchanges)
     strategy = build_strategy(targets, band)
 
     shares = gather_holdings(strategy, vehicles, preloaded)

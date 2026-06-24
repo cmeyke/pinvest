@@ -19,7 +19,15 @@ Gold   = 0
 
 # ══ Vehicles (tickers) ══
 # Change a ticker here only — holdings stay untouched.
+# Each entry may be a plain string (uses the default primary exchange)
+# or a table with an explicit primary_exchange override, e.g. for tickers
+# whose main listing is on a non-default exchange:
+#
+#   [vehicles]
+#   Equity = "SPYY"
+#   Bonds  = "XGLE"
+#   Gold   = { symbol = "EWG2", primary_exchange = "SWB" }
 [vehicles]
 Equity = "SPYY"
 Bonds  = "XGLE"
-Gold   = "EWG2"
+Gold   = { symbol = "EWG2", primary_exchange = "SWB" }

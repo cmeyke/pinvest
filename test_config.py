@@ -103,7 +103,7 @@ def test_build_strategy_error_message_includes_actual_sum():
 # "?" as the ticker. resolve_config now falls back to DEFAULT_VEHICLES
 # whenever vehicles is missing *or* empty, and similarly for targets.
 
-from main import resolve_config, DEFAULT_VEHICLES, DEFAULT_STRATEGY_TARGETS, DEFAULT_BAND
+from main import resolve_config, parse_vehicles, DEFAULT_VEHICLES, DEFAULT_STRATEGY_TARGETS, DEFAULT_BAND, PRIMARY_EXCHANGE
 
 
 def test_resolve_config_returns_defaults_when_config_is_none():
@@ -167,3 +167,96 @@ def test_resolve_config_preloaded_converts_values_to_float():
     r = resolve_config({"holdings": {"Equity": 455, "Bonds": 236}})
     assert r["preloaded"] == {"Equity": 455.0, "Bonds": 236.0}
     assert all(isinstance(v, float) for v in r["preloaded"].values())
+
+
+# ── parse_vehicles: string vs table form, primary_exchange override ────
+
+def test_parse_vehicles_accepts_plain_string_form():
+    """Backward-compatible: Equity = 'SPYY' → vehicles['Equity'] = 'SPYY'."""
+    vehicles, overrides = parse_vehicles({"Equity": "SPYY", "Bonds": "XGLE"})
+    assert vehicles == {"Equity": "SPYY", "Bonds": "XGLE"}
+    assert overrides == {}
+
+
+def test_parse_vehicles_accepts_table_form_with_override():
+    """Gold = {symbol = 'EWG2', primary_exchange = 'SWB'} → override recorded."""
+    vehicles, overrides = parse_vehicles({
+        "Gold": {"symbol": "EWG2", "primary_exchange": "SWB"},
+    })
+    assert vehicles == {"Gold": "EWG2"}
+    assert overrides == {"EWG2": "SWB"}
+
+
+def test_parse_vehicles_table_form_without_override_uses_default():
+    """Table form with only `symbol` → no override entry (default applies)."""
+    vehicles, overrides = parse_vehicles({
+        "Equity": {"symbol": "SPYY"},
+    })
+    assert vehicles == {"Equity": "SPYY"}
+    assert overrides == {}
+
+
+def test_parse_vehicles_mixed_string_and_table_forms():
+    """A config can mix plain strings and tables across assets."""
+    vehicles, overrides = parse_vehicles({
+        "Equity": "SPYY",
+        "Bonds":  "XGLE",
+        "Gold":   {"symbol": "EWG2", "primary_exchange": "SWB"},
+    })
+    assert vehicles == {"Equity": "SPYY", "Bonds": "XGLE", "Gold": "EWG2"}
+    assert overrides == {"EWG2": "SWB"}
+
+
+def test_parse_vehicles_skips_malformed_table_without_symbol():
+    """A table entry missing `symbol` is silently skipped, not blown up on."""
+    vehicles, overrides = parse_vehicles({
+        "Equity": {"primary_exchange": "SWB"},  # no symbol key
+        "Bonds":  "XGLE",
+    })
+    assert vehicles == {"Bonds": "XGLE"}
+    assert overrides == {}
+
+
+# ── resolve_config: primary_exchanges key ───────────────────────────────
+
+def test_resolve_config_returns_default_overrides_when_config_absent():
+    """No .pinvest → use the hardcoded PRIMARY_EXCHANGE overrides."""
+    r = resolve_config(None)
+    assert r["primary_exchanges"] == PRIMARY_EXCHANGE  # {"EWG2": "SWB"}
+
+
+def test_resolve_config_returns_default_overrides_when_vehicles_missing():
+    """Present .pinvest with no [vehicles] → default vehicles + overrides."""
+    r = resolve_config({"strategy": {"band": 0.20}})
+    assert r["vehicles"] == DEFAULT_VEHICLES
+    assert r["primary_exchanges"] == PRIMARY_EXCHANGE
+
+
+def test_resolve_config_overrides_come_from_config_vehicles():
+    """A .pinvest [vehicles] table-form entry supplies the overrides."""
+    r = resolve_config({"vehicles": {
+        "Equity": "SPYY",
+        "Bonds":  "XGLE",
+        "Gold":   {"symbol": "EWG2", "primary_exchange": "SWB"},
+    }})
+    assert r["vehicles"] == {"Equity": "SPYY", "Bonds": "XGLE", "Gold": "EWG2"}
+    assert r["primary_exchanges"] == {"EWG2": "SWB"}
+
+
+def test_resolve_config_string_form_vehicles_yields_empty_overrides():
+    """Plain-string [vehicles] entries produce no overrides (all default)."""
+    r = resolve_config({"vehicles": {"Equity": "SPYY", "Bonds": "XGLE"}})
+    assert r["primary_exchanges"] == {}
+
+
+def test_resolve_config_custom_ticker_custom_exchange_overrides_default():
+    """A user swapping in a non-default ticker can declare its exchange."""
+    r = resolve_config({"vehicles": {
+        "Equity": "SPYY",
+        "Bonds":  "XGLE",
+        "Gold":   {"symbol": "4GLD", "primary_exchange": "IBIS"},
+    }})
+    assert r["vehicles"]["Gold"] == "4GLD"
+    assert r["primary_exchanges"] == {"4GLD": "IBIS"}
+    # The hardcoded EWG2 override is not carried over when EWG2 isn't used.
+    assert "EWG2" not in r["primary_exchanges"]

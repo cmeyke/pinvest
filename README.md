@@ -93,7 +93,7 @@ Gold   = 60
 [vehicles]
 Equity = "SPYY"
 Bonds  = "XGLE"
-Gold   = "EWG2"
+Gold   = { symbol = "EWG2", primary_exchange = "SWB" }
 ```
 
 - **`[strategy]`** — target allocations and tolerance band.  Lower and
@@ -101,7 +101,11 @@ Gold   = "EWG2"
 - **`[holdings]`** — number of shares you own per asset class.  Assets
   listed here skip the interactive prompt.
 - **`[vehicles]`** — which ETF / ETC ticker to use for each asset class.
-  Change a ticker here only; holdings stay untouched.
+  Each entry may be a plain string (e.g. `Equity = "SPYY"`) or a table
+  with an explicit `primary_exchange` override for tickers whose main
+  listing is on a non-default exchange
+  (e.g. `Gold = { symbol = "EWG2", primary_exchange = "SWB" }`).  Change
+  a ticker here only; holdings stay untouched.
 
 `.pinvest` is git-ignored so your personal holdings stay local.  If the
 file is absent the tool falls back to hardcoded defaults (60/25/15 with
