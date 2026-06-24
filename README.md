@@ -150,13 +150,13 @@ Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: 3000
 Existing Portfolio Value : €27,525.00
 Target Post-Investment   : €30,525.00
 
-==================================================
-ASSET CLASS  | CASH TO ROUTE   | SHARES TO BUY
-==================================================
-Equity       | €1,314.16       | 12 shares
-Bonds        | €1,685.84       | 32 shares
-Gold         | €0.00           | 0 shares
-==================================================
+====================================================
+ASSET CLASS  | CASH TO ROUTE    | SHARES TO BUY
+====================================================
+Equity       | €1,314.16        | 12 shares
+Bonds        | €1,685.84        | 32 shares
+Gold         | €0.00            | 0 shares
+====================================================
 Uninvested leftover cash (due to rounding): €63.60
 ```
 
@@ -183,12 +183,12 @@ Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: 0
 ================================================================================
 RUNNING REBALANCE AUDIT (Total Portfolio Value: €27,525.00)
 ================================================================================
-Asset Class  | Current €    | Current %  | Target %   | Allowed Band   | Status
---------------------------------------------------------------------------------
-Equity       | €15,825.00   | 57.49%     | 60.00%     | 48.0% - 72.0%  | OK
-Bonds        | €4,437.00    | 16.12%     | 25.00%     | 20.0% - 30.0%  | TRIGGERED
-Gold         | €7,263.00    | 26.39%     | 15.00%     | 12.0% - 18.0%  | TRIGGERED
---------------------------------------------------------------------------------
+Asset Class  | Current €     | Current %  | Target %   | Allowed Band   | Status    
+------------------------------------------------------------------------------------
+Equity       | €15,825.00    | 57.49%     | 60.00%     | 48.0% - 72.0%  | OK        
+Bonds        | €4,437.00     | 16.12%     | 25.00%     | 20.0% - 30.0%  | TRIGGERED 
+Gold         | €7,263.00     | 26.39%     | 15.00%     | 12.0% - 18.0%  | TRIGGERED 
+------------------------------------------------------------------------------------
 
 [!] ALERT: One or more asset classes have breached the 20% relative
     tolerance bands.

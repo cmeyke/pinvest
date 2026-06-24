@@ -425,18 +425,25 @@ def run_rebalance_audit(strategy: dict, current_values: dict,
     print(f"\n{'='*80}")
     print(f"RUNNING REBALANCE AUDIT (Total Portfolio Value: €{total_value:,.2f})")
     print(f"{'='*80}")
-    print(f"{'Asset Class':<12} | {'Current €':<12} | {'Current %':<10} | "
+    print(f"{'Asset Class':<12} | {'Current €':<13} | {'Current %':<10} | "
           f"{'Target %':<10} | {'Allowed Band':<14} | {'Status':<10}")
-    print("-" * 82)
+    print("-" * 84)
 
     for a in result["assets"]:
-        print(f"{a['asset']:<12} | €{a['current_eur']:<10,.2f} | "
-              f"{a['current_pct']*100:<8.2f}% | "
-              f"{a['target_pct']*100:<8.2f}% | "
-              f"{a['lower_pct']*100:.1f}% - {a['upper_pct']*100:.1f}% | "
-              f"{a['status']}")
+        # Build each cell as a complete string (including € and %), then
+        # apply the column width to the whole thing. The header widths
+        # (12 / 13 / 10 / 10 / 14 / 10) must match the cell widths exactly
+        # or the columns misalign — previously the € and % contributed to
+        # the cell width but not the header width, shifting every column.
+        # Current € width is 13 to fit values up to €9,999,999.99.
+        current_eur = f"€{a['current_eur']:,.2f}"
+        current_pct = f"{a['current_pct']*100:.2f}%"
+        target_pct = f"{a['target_pct']*100:.2f}%"
+        band = f"{a['lower_pct']*100:.1f}% - {a['upper_pct']*100:.1f}%"
+        print(f"{a['asset']:<12} | {current_eur:<13} | {current_pct:<10} | "
+              f"{target_pct:<10} | {band:<14} | {a['status']:<10}")
 
-    print("-" * 82)
+    print("-" * 84)
 
     if not result["triggered"]:
         print("\n[✓] Portfolio is well within tolerance bands. "
@@ -543,14 +550,15 @@ def run_lump_sum(strategy: dict, current_values: dict,
     print(f"\nExisting Portfolio Value : €{total_value:,.2f}")
     print(f"Target Post-Investment   : €{result['new_target']:,.2f}")
 
-    print("\n" + "=" * 50)
-    print(f"{'ASSET CLASS':<12} | {'CASH TO ROUTE':<15} | {'SHARES TO BUY'}")
-    print("=" * 50)
+    print("\n" + "=" * 52)
+    print(f"{'ASSET CLASS':<12} | {'CASH TO ROUTE':<16} | {'SHARES TO BUY'}")
+    print("=" * 52)
 
     for o in result["orders"]:
-        print(f"{o['asset']:<12} | €{o['cash']:<13,.2f} | {o['shares']} shares")
+        cash = f"€{o['cash']:,.2f}"
+        print(f"{o['asset']:<12} | {cash:<16} | {o['shares']} shares")
 
-    print("=" * 50)
+    print("=" * 52)
     print(f"Uninvested leftover cash (due to rounding): "
           f"€{result['total_leftover']:.2f}\n")
 
