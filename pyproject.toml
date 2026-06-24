@@ -11,6 +11,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "pyright>=1.1.410",
 ]
 
 [tool.pytest.ini_options]

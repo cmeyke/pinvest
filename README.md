@@ -61,7 +61,7 @@ The only runtime dependency is `ib-insync`.
 
 ### Tests
 
-Install the dev dependencies (adds `pytest`) and run the suite:
+Install the dev dependencies (adds `pytest` and `pyright`) and run the suite:
 
 ```bash
 uv sync --extra dev
@@ -69,6 +69,15 @@ uv run pytest
 ```
 
 Tests use isolated temp directories and never touch your real `.pinvest`.
+
+### Type checking
+
+The same dev install also provides `pyright`, configured via
+`pyrightconfig.json` to use the project's `.venv`:
+
+```bash
+uv run pyright
+```
 
 ---
 
