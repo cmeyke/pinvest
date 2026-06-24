@@ -97,19 +97,27 @@ def resolve_price(q: dict) -> float | None:
     """Best available price using the fallback chain.
 
     midprice → bid-only → ask-only → last → close → None (manual entry).
+
+    Quote keys are read with ``.get()`` so a partial quote dict (one
+    missing some keys) returns ``None`` for the absent side rather than
+    raising ``KeyError``. ``None`` is already the sentinel the chain
+    checks against, so this makes third-party quote sources that omit
+    a key a first-class input.
     """
-    bid = q['bid']
-    ask = q['ask']
+    bid = q.get('bid')
+    ask = q.get('ask')
     if bid is not None and ask is not None:
         return (bid + ask) / 2.0
     if bid is not None:
         return bid
     if ask is not None:
         return ask
-    if q['last'] is not None:
-        return q['last']
-    if q['close'] is not None:
-        return q['close']
+    last = q.get('last')
+    if last is not None:
+        return last
+    close = q.get('close')
+    if close is not None:
+        return close
     return None
 
 
@@ -119,8 +127,9 @@ def resolve_buy_price(q: dict) -> float | None:
     Falls back to the fair-value chain (mid → bid → ask → last → close)
     when no ask is quoted, so a usable price is always returned.
     """
-    if q['ask'] is not None:
-        return q['ask']
+    ask = q.get('ask')
+    if ask is not None:
+        return ask
     return resolve_price(q)
 
 
@@ -130,24 +139,49 @@ def resolve_sell_price(q: dict) -> float | None:
     Falls back to the fair-value chain (mid → bid → ask → last → close)
     when no bid is quoted, so a usable price is always returned.
     """
-    if q['bid'] is not None:
-        return q['bid']
+    bid = q.get('bid')
+    if bid is not None:
+        return bid
     return resolve_price(q)
 
 
 def gather_holdings(strategy: dict,
                     vehicles: dict[str, str],
-                    preloaded: dict[str, float] | None = None
+                    preloaded: dict[str, object] | None = None
                     ) -> dict[str, float]:
-    """Prompt for shares; skip assets already supplied via config."""
+    """Prompt for shares; skip assets already supplied via config.
+
+    Validates that every value in ``preloaded`` is a real number — a
+    non-numeric TOML value (e.g. ``Equity = "abc"``) raises ``ValueError``
+    here with a clear message, rather than slipping through and blowing
+    up later in a print format string. The orchestrator path already
+    converts via ``float(shares)`` in ``resolve_config``, so this guard
+    is for direct callers and for the case where that conversion is
+    ever loosened.
+
+    ``preloaded`` is typed ``dict[str, object]`` (not ``dict[str, float]``)
+    because the whole point of this guard is to accept raw config values
+    of unknown type and reject the non-numeric ones at the boundary.
+    """
     preloaded = preloaded or {}
+    for asset, shares in preloaded.items():
+        if not isinstance(shares, (int, float)) or isinstance(shares, bool):
+            raise ValueError(
+                f"Preloaded holding for {asset!r} is not a number: "
+                f"{shares!r} (type {type(shares).__name__})."
+            )
     print("--- 1. CURRENT PORTFOLIO HOLDINGS ---")
     result: dict[str, float] = {}
     for asset in strategy:
         sym = vehicles.get(asset, "?")
         if asset in preloaded:
-            result[asset] = preloaded[asset]
-            print(f"  {asset:<8}: {preloaded[asset]:.0f} shares of {sym}"
+            value = preloaded[asset]
+            # The validation loop above already rejected non-numbers; this
+            # isinstance is a type-narrowing hint for pyright, not a runtime
+            # re-check.
+            assert isinstance(value, (int, float))
+            result[asset] = float(value)
+            print(f"  {asset:<8}: {result[asset]:.0f} shares of {sym}"
                   f" (from .pinvest)")
         else:
             result[asset] = get_float_input(

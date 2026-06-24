@@ -112,3 +112,56 @@ def test_buy_price_is_at_least_sell_price_when_both_sides_quoted():
     sell = resolve_sell_price(q)
     assert buy is not None and sell is not None
     assert buy >= sell
+
+
+# ── Partial quote dicts: missing keys must not raise KeyError ──────────
+#
+# resolve_price / resolve_buy_price / resolve_sell_price previously used
+# q['key'], so a third-party quote source that omitted a side blew up
+# with KeyError. They now use q.get('key'), which returns None — the
+# sentinel the fallback chain already checks against — so a partial
+# quote is a first-class input.
+
+def test_resolve_price_tolerates_quote_missing_all_side_keys():
+    """A quote dict with no bid/ask/last/close keys returns None, not KeyError."""
+    assert resolve_price({}) is None
+
+
+def test_resolve_price_uses_present_keys_in_partial_dict():
+    """Only `last` present → falls through to it without accessing missing keys."""
+    q = {"last": 99.0}  # no bid/ask/close keys at all
+    assert resolve_price(q) == pytest.approx(99.0)
+
+
+def test_resolve_price_partial_dict_with_only_close():
+    q = {"close": 98.0}
+    assert resolve_price(q) == pytest.approx(98.0)
+
+
+def test_resolve_buy_price_tolerates_quote_missing_ask_key():
+    """No `ask` key at all → falls back to resolve_price (last present)."""
+    q = {"bid": 100.0, "last": 99.0}  # no `ask` key
+    assert resolve_buy_price(q) == pytest.approx(100.0)  # midprice from bid+… no, bid-only
+
+
+def test_resolve_buy_price_returns_none_when_completely_empty():
+    assert resolve_buy_price({}) is None
+
+
+def test_resolve_sell_price_tolerates_quote_missing_bid_key():
+    """No `bid` key at all → falls back to resolve_price (ask present)."""
+    q = {"ask": 102.0, "last": 99.0}  # no `bid` key
+    assert resolve_sell_price(q) == pytest.approx(102.0)
+
+
+def test_resolve_sell_price_returns_none_when_completely_empty():
+    assert resolve_sell_price({}) is None
+
+
+def test_partial_quote_does_not_silently_drop_present_value():
+    """A quote with only `bid` should yield bid for resolve_price and
+    resolve_sell_price (not None), proving the .get() path actually uses
+    the present value rather than just failing closed."""
+    q = {"bid": 100.0}
+    assert resolve_price(q) == pytest.approx(100.0)
+    assert resolve_sell_price(q) == pytest.approx(100.0)
