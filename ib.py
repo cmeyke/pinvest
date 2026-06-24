@@ -133,8 +133,6 @@ if __name__ == '__main__':
               primaryExchange='IBIS'),
         Stock(symbol='XGLE', exchange='SMART', currency='EUR',
               primaryExchange='IBIS'),
-        Stock(symbol='4GLD', exchange='SMART', currency='EUR',
-              primaryExchange='IBIS'),
         Stock(symbol='EWG2', exchange='SMART', currency='EUR',
               primaryExchange='SWB'),
     ]
