@@ -19,14 +19,22 @@ DEFAULT_EXCHANGE = "IBIS"
 # ══════════════════════════════════════════════════════════════════════
 
 def load_config(path: Path | None = None) -> dict | None:
-    """Load .pinvest if present; return None when absent or unreadable."""
+    """Load .pinvest if present; return None when absent or unreadable.
+
+    Returns ``None`` if the file is absent. If the file exists but cannot
+    be parsed (malformed TOML, IO error), prints a warning describing the
+    error and returns ``None`` so the caller falls back to defaults — but
+    the user is now explicitly told their config was ignored, rather than
+    silently getting the default 60/25/15 strategy.
+    """
     config_path = path or Path(__file__).parent / ".pinvest"
     if not config_path.exists():
         return None
     try:
         with open(config_path, "rb") as f:
             return tomllib.load(f)
-    except Exception:
+    except (tomllib.TOMLDecodeError, OSError) as e:
+        print(f"⚠️  .pinvest is unreadable ({e}); using defaults.")
         return None
 
 
@@ -42,10 +50,18 @@ def build_strategy(targets: dict[str, float], band: float
     """Derive lower / upper trigger bands from targets and a relative band.
 
     Example: target=0.60 + band=0.20 → lower=0.48, upper=0.72.
+
+    Raises ``ValueError`` if the targets do not sum to 1.0 (within a 1%
+    tolerance). Downstream rebalance and lump-sum math divides by the
+    total portfolio value and uses each target as a weight, so a
+    non-100% sum would silently under- or over-allocate — for a finance
+    tool this is a foot-gun worth refusing rather than warning about.
     """
     total = sum(targets.values())
     if abs(total - 1.0) > 0.01:
-        print(f"⚠️  Strategy targets sum to {total:.1%}, expected 100%.")
+        raise ValueError(
+            f"Strategy targets sum to {total:.1%}, expected 100%."
+        )
     return {a: {"target": t,
                 "lower": t * (1.0 - band),
                 "upper": t * (1.0 + band)}
