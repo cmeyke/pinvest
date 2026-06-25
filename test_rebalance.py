@@ -301,3 +301,90 @@ def test_phase3_buy_order_is_discrepancy_descending():
     assert r is not None
     discrepancies = [b["discrepancy"] for b in r["buy_orders"]]
     assert discrepancies == sorted(discrepancies, reverse=True)
+
+
+# ── Cash side fund: deployed to fund buys before selling ───────────────
+#
+# Cash is a EUR side fund, separate from the invested-asset weights. It's
+# deployed to fund buy orders *before* selling overweight assets, so the
+# sells only need to raise the unfunded portion — smaller sells mean
+# less overshoot and more of the over-target assets stay closer to target.
+
+# README Scenario B base — used by several cash tests.
+CV = {"Equity": 15825.0, "Bonds": 4437.0, "Gold": 7263.0}
+TOTAL = sum(CV.values())
+
+
+def test_cash_reduces_the_sell_size():
+    """With cash on hand, sells should be smaller than without."""
+    r0 = compute_rebalance(STRATEGY, CV, TOTAL, BUY_PRICES, SELL_PRICES, cash=0.0)
+    r1 = compute_rebalance(STRATEGY, CV, TOTAL, BUY_PRICES, SELL_PRICES, cash=1500.0)
+    assert r0 is not None and r1 is not None
+    # The no-cash case sells 25 Gold; with €1,500 cash it should sell fewer.
+    sell_shares_0 = sum(s["shares"] for s in r0["sell_orders"])
+    sell_shares_1 = sum(s["shares"] for s in r1["sell_orders"])
+    assert sell_shares_1 < sell_shares_0
+
+
+def test_cash_fully_funding_eliminates_sells():
+    """When cash covers the entire buy total, no sells are needed."""
+    r = compute_rebalance(STRATEGY, CV, TOTAL, BUY_PRICES, SELL_PRICES, cash=5000.0)
+    assert r is not None
+    assert r["sell_orders"] == []
+    assert r["total_cash_raised"] == 0.0
+    # Buys still happen — the underweight assets still get funded.
+    assert len(r["buy_orders"]) > 0
+
+
+def test_cash_deployed_never_exceeds_cash_available():
+    """The deployed amount can't exceed the cash side fund."""
+    for cash in [0.0, 100.0, 1500.0, 5000.0, 100_000.0]:
+        r = compute_rebalance(STRATEGY, CV, TOTAL, BUY_PRICES, SELL_PRICES, cash=cash)
+        assert r is not None
+        assert r["cash_deployed"] <= cash + 1e-9
+
+
+def test_cash_deployed_never_exceeds_buy_total():
+    """The deployed amount can't exceed what the buys actually cost."""
+    for cash in [0.0, 1500.0, 5000.0, 100_000.0]:
+        r = compute_rebalance(STRATEGY, CV, TOTAL, BUY_PRICES, SELL_PRICES, cash=cash)
+        assert r is not None
+        assert r["cash_deployed"] <= r["total_cash_needed"] + 1e-9
+
+
+def test_order_list_remains_executable_with_cash():
+    """sum(buy cash) ≤ cash + sum(sell cash) — the list is executable as-is."""
+    for cash in [0.0, 1500.0, 5000.0]:
+        r = compute_rebalance(STRATEGY, CV, TOTAL, BUY_PRICES, SELL_PRICES, cash=cash)
+        assert r is not None
+        available = r["cash"] + r["total_cash_raised"]
+        assert r["total_cash_needed"] <= available + 1e-9
+
+
+def test_cash_does_not_affect_invested_asset_weights():
+    """Cash is a side fund — it must not change current_pct or target_pct.
+
+    The band-breach status should be identical with and without cash,
+    since weights are % of invested assets only (cash excluded).
+    """
+    r0 = compute_rebalance(STRATEGY, CV, TOTAL, BUY_PRICES, SELL_PRICES, cash=0.0)
+    r1 = compute_rebalance(STRATEGY, CV, TOTAL, BUY_PRICES, SELL_PRICES, cash=10_000.0)
+    assert r0 is not None and r1 is not None
+    for a0, a1 in zip(r0["assets"], r1["assets"]):
+        assert a0["current_pct"] == pytest.approx(a1["current_pct"])
+        assert a0["status"] == a1["status"]
+
+
+def test_cash_reported_in_result():
+    """The result echoes the cash input so the print path can report it."""
+    r = compute_rebalance(STRATEGY, CV, TOTAL, BUY_PRICES, SELL_PRICES, cash=1234.56)
+    assert r is not None
+    assert r["cash"] == 1234.56
+
+
+def test_cash_defaults_to_zero_when_not_passed():
+    """compute_rebalance must work without a cash argument (backward compat)."""
+    r = compute_rebalance(STRATEGY, CV, TOTAL, BUY_PRICES, SELL_PRICES)
+    assert r is not None
+    assert r["cash"] == 0.0
+    assert r["cash_deployed"] == 0.0

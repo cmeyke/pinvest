@@ -147,9 +147,10 @@ def resolve_sell_price(q: dict) -> float | None:
 
 def gather_holdings(strategy: dict,
                     vehicles: dict[str, str],
-                    preloaded: dict[str, object] | None = None
-                    ) -> dict[str, float]:
-    """Prompt for shares; skip assets already supplied via config.
+                    preloaded: dict[str, object] | None = None,
+                    cash: float | None = None
+                    ) -> tuple[dict[str, float], float]:
+    """Prompt for shares and cash; skip assets already supplied via config.
 
     Validates that every value in ``preloaded`` is a real number — a
     non-numeric TOML value (e.g. ``Equity = "abc"``) raises ``ValueError``
@@ -162,6 +163,11 @@ def gather_holdings(strategy: dict,
     ``preloaded`` is typed ``dict[str, object]`` (not ``dict[str, float]``)
     because the whole point of this guard is to accept raw config values
     of unknown type and reject the non-numeric ones at the boundary.
+
+    ``cash`` is a EUR side fund, separate from share counts. ``None``
+    means "not supplied in .pinvest" → prompt the user. A numeric value
+    (including 0.0) means the user explicitly declared it → use as-is.
+    Returns ``(shares, cash)``.
     """
     preloaded = preloaded or {}
     for asset, shares in preloaded.items():
@@ -186,7 +192,12 @@ def gather_holdings(strategy: dict,
         else:
             result[asset] = get_float_input(
                 f"Current {asset} ({sym}) shares owned : ")
-    return result
+    # Cash side fund: EUR, not shares. Prompt only if not supplied by config.
+    if cash is None:
+        cash = get_float_input("Current cash position (€) : ")
+    else:
+        print(f"  Cash     : €{cash:,.2f} (from .pinvest)")
+    return result, cash
 
 
 def gather_prices(contracts: list, symbol_map: dict, strategy: dict
@@ -243,9 +254,15 @@ def gather_prices(contracts: list, symbol_map: dict, strategy: dict
     return prices, buy_prices, sell_prices
 
 
-def print_portfolio_summary(strategy: dict, shares: dict, prices: dict
+def print_portfolio_summary(strategy: dict, shares: dict, prices: dict,
+                            cash: float = 0.0
                             ) -> tuple[dict[str, float], float]:
-    """Print portfolio value breakdown; return (current_values, total_value)."""
+    """Print portfolio value breakdown; return (current_values, total_value).
+
+    ``cash`` is reported as a side fund — it's *not* added to
+    ``total_value`` (invested weights stay as % of invested assets), but
+    it is shown in the breakdown so the user sees the complete picture.
+    """
     current_values = {a: shares[a] * prices[a] for a in strategy}
     total = sum(current_values.values())
 
@@ -253,6 +270,7 @@ def print_portfolio_summary(strategy: dict, shares: dict, prices: dict
     for a in strategy:
         print(f"  {a:<8}: {shares[a]:.0f} shares × €{prices[a]:.2f}"
               f" = €{current_values[a]:,.2f}")
+    print(f"  Cash     : €{cash:,.2f} (side fund — not counted in weights)")
     return current_values, total
 
 
@@ -262,7 +280,7 @@ def print_portfolio_summary(strategy: dict, shares: dict, prices: dict
 
 def compute_rebalance(strategy: dict, current_values: dict,
                       total_value: float, buy_prices: dict,
-                      sell_prices: dict) -> dict | None:
+                      sell_prices: dict, cash: float = 0.0) -> dict | None:
     """Compute the rebalance audit and the trades needed to restore targets.
 
     Returns a dict with the following keys, or ``None`` when the portfolio
@@ -282,6 +300,18 @@ def compute_rebalance(strategy: dict, current_values: dict,
       asset's excess.
     - **total_cash_needed** (*float*) — sum of buy order costs.
     - **total_cash_raised** (*float*) — sum of sell order proceeds.
+    - **cash** (*float*) — the side-fund cash available to fund buys
+      before resorting to sells.
+    - **cash_deployed** (*float*) — how much of the side-fund cash was
+      actually spent on buys. Equal to ``cash`` when buys fully absorb
+      it; less when buys are smaller than the fund (rare — only happens
+      when no asset is underweight).
+
+    ``cash`` is a EUR side fund reported alongside the portfolio but not
+    counted in the invested-asset weights. It is deployed to fund buy
+    orders *before* selling overweight assets, so the sells only need to
+    raise the unfunded portion — smaller sells mean less overshoot and
+    more of the over-target assets stay closer to their targets.
     """
     if total_value <= 0:
         return None
@@ -321,18 +351,25 @@ def compute_rebalance(strategy: dict, current_values: dict,
         if eur_diff > 0:
             price = buy_prices[asset]
             shares = math.floor(eur_diff / price)
-            cash = shares * price
+            cash_cost = shares * price
             buy_orders.append({
                 "asset":      asset,
                 "shares":     shares,
-                "cash":       cash,
+                "cash":       cash_cost,
                 "discrepancy": eur_diff,
             })
-            total_cash_needed += cash
+            total_cash_needed += cash_cost
         elif eur_diff < 0:
             sell_targets.append((asset, abs(eur_diff), sell_prices[asset]))
 
-    # Phase 2: Sell proportionally to fund the buys.
+    # The side-fund cash is deployed to fund buys *before* selling. Only
+    # the unfunded portion needs to be raised from sells — this keeps
+    # sells smaller, which in turn means less overshoot (Phase 2 trims
+    # fewer shares) and more of the over-target assets stay closer to
+    # their targets.
+    unfunded = max(total_cash_needed - cash, 0.0)
+
+    # Phase 2: Sell proportionally to fund the unfunded portion of the buys.
     # Each sell's target_cash is capped at the asset's excess so we never
     # push an asset below its target weight. ceil() then rounds shares up
     # to raise at least target_cash — but that can overshoot the cap by up
@@ -344,41 +381,41 @@ def compute_rebalance(strategy: dict, current_values: dict,
     # which is significant when the sell asset is expensive (e.g. trim
     # from 2 × €2,500 to 1 × €2,500 drops €2,500 of cash). When that
     # happens the buys as originally sized would cost more than the sells
-    # raised, producing an unexecutable order list. Phase 3 below closes
-    # that gap by re-sizing the buys to fit the cash actually raised.
+    # raised + the cash side fund, producing an unexecutable order list.
+    # Phase 3 below closes that gap by re-sizing the buys to fit.
     sell_orders: list[dict] = []
     total_cash_raised = 0.0
-    if sell_targets and total_cash_needed > 0:
+    if sell_targets and unfunded > 0:
         total_excess = sum(excess for _, excess, _ in sell_targets)
-        remaining = total_cash_needed
+        remaining = unfunded
         for asset, excess, price in sell_targets:
             if remaining <= 0:
                 break
             proportion = excess / total_excess
-            target_cash = min(proportion * total_cash_needed, excess)
+            target_cash = min(proportion * unfunded, excess)
             shares = math.ceil(target_cash / price)
             # Trim overshoot: never sell more shares than the excess can absorb.
             while shares > 0 and shares * price > excess:
                 shares -= 1
-            cash = shares * price
-            remaining -= cash
-            total_cash_raised += cash
+            cash_from_sale = shares * price
+            remaining -= cash_from_sale
+            total_cash_raised += cash_from_sale
             sell_orders.append({
                 "asset":  asset,
                 "shares": shares,
-                "cash":   cash,
+                "cash":   cash_from_sale,
                 "excess": excess,
             })
 
-    # Phase 3: Re-size buys to fit the cash actually raised.
-    # Sells may raise less than total_cash_needed (see Phase 2 note). Walk
+    # Phase 3: Re-size buys to fit the cash actually available.
+    # Available cash = side-fund cash + cash actually raised by sells. Walk
     # the buy list in *discrepancy-descending* order — most underweight
-    # asset first — spending the remaining cash on each buy up to its
+    # asset first — spending the available cash on each buy up to its
     # original floored share count. Two properties fall out of this:
     #
     #   1. The printed order list is always executable as-is
-    #      (sum(buy cash) ≤ sum(sell cash)) and we don't leave cash idle
-    #      the way a naive proportional scale would.
+    #      (sum(buy cash) ≤ cash + sum(sell cash)) and we don't leave cash
+    #      idle the way a naive proportional scale would.
     #
     #   2. When cash is tight, the most underweight asset gets priority.
     #      Funding the largest-EUR-shortfall asset first minimizes the
@@ -386,14 +423,10 @@ def compute_rebalance(strategy: dict, current_values: dict,
     #      strategy-order walk would leave in place — e.g. an asset
     #      sitting below its lower band gets lifted to the band edge
     #      before cash is spent perfecting a near-target asset.
-    #
-    # Bought assets may end up further below target than the ideal
-    # floor(discrepancy / price), but they were under-target already —
-    # no new band breach is created, and the user is never asked to
-    # come up with extra cash.
-    if total_cash_needed > 0 and total_cash_raised < total_cash_needed:
+    available = cash + total_cash_raised
+    if total_cash_needed > 0 and available < total_cash_needed:
         buy_orders.sort(key=lambda b: b["discrepancy"], reverse=True)
-        budget = total_cash_raised
+        budget = available
         for b in buy_orders:
             price = buy_prices[b["asset"]]
             max_shares = b["shares"]  # original floor(discrepancy / price)
@@ -403,6 +436,12 @@ def compute_rebalance(strategy: dict, current_values: dict,
             budget -= b["cash"]
         total_cash_needed = sum(b["cash"] for b in buy_orders)
 
+    # How much of the side-fund cash was actually spent on buys. The buy
+    # total is funded by (cash side fund + sell proceeds), so cash_deployed
+    # is whatever portion of `cash` wasn't covered by sells — bounded by
+    # both the cash available and the buy total.
+    cash_deployed = min(cash, max(total_cash_needed - total_cash_raised, 0.0))
+
     return {
         "assets":            assets,
         "triggered":         triggered,
@@ -410,20 +449,24 @@ def compute_rebalance(strategy: dict, current_values: dict,
         "sell_orders":       sell_orders,
         "total_cash_needed": total_cash_needed,
         "total_cash_raised": total_cash_raised,
+        "cash":              cash,
+        "cash_deployed":     cash_deployed,
     }
 
 
 def run_rebalance_audit(strategy: dict, current_values: dict,
                         total_value: float, buy_prices: dict,
-                        sell_prices: dict) -> None:
+                        sell_prices: dict, cash: float = 0.0) -> None:
     result = compute_rebalance(strategy, current_values, total_value,
-                               buy_prices, sell_prices)
+                               buy_prices, sell_prices, cash)
     if result is None:
         print("Error: Cannot rebalance — portfolio has no value.")
         return
 
     print(f"\n{'='*80}")
     print(f"RUNNING REBALANCE AUDIT (Total Portfolio Value: €{total_value:,.2f})")
+    if cash:
+        print(f"Side-fund cash available to fund buys: €{cash:,.2f}")
     print(f"{'='*80}")
     print(f"{'Asset Class':<12} | {'Current €':<13} | {'Current %':<10} | "
           f"{'Target %':<10} | {'Allowed Band':<14} | {'Status':<10}")
@@ -468,6 +511,9 @@ def run_rebalance_audit(strategy: dict, current_values: dict,
               f"for €{price:.2f}  (Cost: €{b['cash']:,.2f})")
 
     print("=" * 60)
+    if result["cash_deployed"] > 0:
+        print(f"Of which €{result['cash_deployed']:,.2f} funded from the "
+              f"cash side fund; €{result['total_cash_raised']:,.2f} from sells.")
     print("Note: Execute sales first to generate the liquidity "
           "before placing buy orders.")
 
@@ -602,7 +648,11 @@ def resolve_config(config: dict | None) -> dict:
     A present-but-incomplete config falls back to the same defaults as an
     absent one, rather than silently producing empty vehicles/targets and
     a broken run. Returns a dict with keys: vehicles, preloaded, targets,
-    band, primary_exchanges.
+    band, primary_exchanges, cash.
+
+    ``cash`` is ``None`` when no ``Cash`` key is present in ``[holdings]``
+    (meaning: prompt the user for it). A numeric value (including 0.0)
+    means the user explicitly declared it — use it, don't prompt.
     """
     if config:
         raw_vehicles = config.get("vehicles")
@@ -610,19 +660,25 @@ def resolve_config(config: dict | None) -> dict:
             vehicles, primary_exchanges = parse_vehicles(raw_vehicles)
         else:
             vehicles, primary_exchanges = DEFAULT_VEHICLES, PRIMARY_EXCHANGE
+        # Cash is pulled out of [holdings] separately so it isn't treated
+        # as a share count. It's a EUR side fund, not a vehicle-backed asset.
+        raw_holdings = dict(config.get("holdings", {}))
+        cash_raw = raw_holdings.pop("Cash", None)
         preloaded = {asset: float(shares)
-                     for asset, shares in config.get("holdings", {}).items()}
+                     for asset, shares in raw_holdings.items()}
+        cash = float(cash_raw) if cash_raw is not None else None
         strat_cfg = config.get("strategy", {})
         targets = strat_cfg.get("targets") or DEFAULT_STRATEGY_TARGETS
         band = strat_cfg.get("band", DEFAULT_BAND)
     else:
         vehicles, primary_exchanges = DEFAULT_VEHICLES, PRIMARY_EXCHANGE
         preloaded = {}
+        cash = None
         targets = DEFAULT_STRATEGY_TARGETS
         band = DEFAULT_BAND
     return {"vehicles": vehicles, "preloaded": preloaded,
             "targets": targets, "band": band,
-            "primary_exchanges": primary_exchanges}
+            "primary_exchanges": primary_exchanges, "cash": cash}
 
 
 def main() -> None:
@@ -632,24 +688,28 @@ def main() -> None:
     targets = cfg["targets"]
     band = cfg["band"]
     primary_exchanges = cfg["primary_exchanges"]
+    cash = cfg["cash"]
 
     # Common plumbing — identical regardless of whether config was used.
     symbol_map = {sym: asset for asset, sym in vehicles.items()}
     contracts = build_contracts(list(symbol_map.keys()), primary_exchanges)
     strategy = build_strategy(targets, band)
 
-    shares = gather_holdings(strategy, vehicles, preloaded)
+    shares, cash = gather_holdings(strategy, vehicles, preloaded, cash)
     prices, buy_prices, sell_prices = gather_prices(contracts, symbol_map, strategy)
     current_values, total_value = print_portfolio_summary(
-        strategy, shares, prices)
+        strategy, shares, prices, cash)
 
     print("\n--- 3. INVESTMENT CASH ---")
     lump_sum = get_float_input(
         "Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: ")
 
     if lump_sum == 0:
+        # Cash side fund is only used to fund the rebalance — in the
+        # lump-sum (investment) case the new cash is the deployment target
+        # and the existing cash position is irrelevant.
         run_rebalance_audit(strategy, current_values, total_value,
-                            buy_prices, sell_prices)
+                            buy_prices, sell_prices, cash)
     else:
         run_lump_sum(strategy, current_values, total_value, lump_sum,
                      buy_prices)

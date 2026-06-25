@@ -98,6 +98,7 @@ Gold   = 0.15
 Equity = 150
 Bonds  = 85
 Gold   = 60
+Cash   = 1000            # EUR side fund (see below)
 
 [vehicles]
 Equity = "SPYY"
@@ -108,7 +109,12 @@ Gold   = { symbol = "EWG2", primary_exchange = "SWB" }
 - **`[strategy]`** — target allocations and tolerance band.  Lower and
   upper trigger bands are derived automatically (target ± band).
 - **`[holdings]`** — number of shares you own per asset class.  Assets
-  listed here skip the interactive prompt.
+  listed here skip the interactive prompt.  An optional `Cash` key (a EUR
+  amount, not shares) declares a cash side fund; omit it to be prompted
+  at runtime.  Cash is *not* counted toward the invested-asset weights —
+  it's reported alongside the portfolio and used to fund buy orders in
+  the rebalance case before selling overweight assets, so the sells can
+  be smaller.  Cash is ignored in the lump-sum (investment) case.
 - **`[vehicles]`** — which ETF / ETC ticker to use for each asset class.
   Each entry may be a plain string (e.g. `Equity = "SPYY"`) or a table
   with an explicit `primary_exchange` override for tickers whose main

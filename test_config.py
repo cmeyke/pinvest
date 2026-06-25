@@ -260,3 +260,52 @@ def test_resolve_config_custom_ticker_custom_exchange_overrides_default():
     assert r["primary_exchanges"] == {"4GLD": "IBIS"}
     # The hardcoded EWG2 override is not carried over when EWG2 isn't used.
     assert "EWG2" not in r["primary_exchanges"]
+
+
+# ── resolve_config: Cash side fund extraction ──────────────────────────
+#
+# Cash is pulled out of [holdings] separately so it isn't treated as a
+# share count. It's a EUR amount, not shares. None means "not declared in
+# .pinvest → prompt the user"; a numeric value (including 0.0) means the
+# user explicitly declared it.
+
+def test_resolve_config_cash_is_none_when_holdings_omitted():
+    """No [holdings] section at all → cash is None (prompt at runtime)."""
+    r = resolve_config({"strategy": {"band": 0.20}})
+    assert r["cash"] is None
+
+
+def test_resolve_config_cash_is_none_when_cash_key_absent():
+    """[holdings] present but no Cash key → cash is None (prompt)."""
+    r = resolve_config({"holdings": {"Equity": 100, "Bonds": 50, "Gold": 25}})
+    assert r["cash"] is None
+    # And the share counts are unaffected.
+    assert r["preloaded"] == {"Equity": 100.0, "Bonds": 50.0, "Gold": 25.0}
+
+
+def test_resolve_config_cash_extracted_from_holdings():
+    """Cash = 1000 in [holdings] → cash=1000.0, NOT in preloaded shares."""
+    r = resolve_config({"holdings": {"Equity": 100, "Bonds": 50, "Gold": 25, "Cash": 1000}})
+    assert r["cash"] == 1000.0
+    assert "Cash" not in r["preloaded"]
+    assert r["preloaded"] == {"Equity": 100.0, "Bonds": 50.0, "Gold": 25.0}
+
+
+def test_resolve_config_cash_zero_is_a_real_value_not_none():
+    """Cash = 0 must be stored as 0.0, not None — the user declared it."""
+    r = resolve_config({"holdings": {"Equity": 100, "Cash": 0}})
+    assert r["cash"] == 0.0
+    assert r["cash"] is not None
+
+
+def test_resolve_config_cash_converted_to_float():
+    """TOML integer Cash becomes float so downstream math stays float."""
+    r = resolve_config({"holdings": {"Equity": 100, "Cash": 1500}})
+    assert r["cash"] == 1500.0
+    assert isinstance(r["cash"], float)
+
+
+def test_resolve_config_cash_is_none_when_config_absent():
+    """No .pinvest at all → cash is None (the orchestrator will prompt)."""
+    r = resolve_config(None)
+    assert r["cash"] is None
