@@ -155,9 +155,11 @@ underweighted assets without selling any current shares.
   Gold     (EWG2): €121.05
 
 💰 Current Portfolio Value: €27,525.00
+💰 Including Cash:           €27,525.00
   Equity  : 150 shares × €105.50 = €15,825.00
   Bonds   : 85 shares × €52.20 = €4,437.00
   Gold    : 60 shares × €121.05 = €7,263.00
+  Cash    : €0.00 (side fund — not counted in weights)
 
 --- 3. INVESTMENT CASH ---
 Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: 3000
@@ -188,9 +190,11 @@ relative band has been breached.
 
 ```text
 💰 Current Portfolio Value: €27,525.00
+💰 Including Cash:           €27,525.00
   Equity  : 150 shares × €105.50 = €15,825.00
   Bonds   : 85 shares × €52.20 = €4,437.00
   Gold    : 60 shares × €121.05 = €7,263.00
+  Cash    : €0.00 (side fund — not counted in weights)
 
 --- 3. INVESTMENT CASH ---
 Amount of new cash to invest (€) [Enter 0 to run Rebalance Audit]: 0

@@ -267,6 +267,7 @@ def print_portfolio_summary(strategy: dict, shares: dict, prices: dict,
     total = sum(current_values.values())
 
     print(f"\n💰 Current Portfolio Value: €{total:,.2f}")
+    print(f"💰 Including Cash:           €{total + cash:,.2f}")
     for a in strategy:
         print(f"  {a:<8}: {shares[a]:.0f} shares × €{prices[a]:.2f}"
               f" = €{current_values[a]:,.2f}")
