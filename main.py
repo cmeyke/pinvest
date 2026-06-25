@@ -196,7 +196,7 @@ def gather_holdings(strategy: dict,
     if cash is None:
         cash = get_float_input("Current cash position (€) : ")
     else:
-        print(f"  Cash     : €{cash:,.2f} (from .pinvest)")
+        print(f"  {'Cash':<8}: €{cash:,.2f} (from .pinvest)")
     return result, cash
 
 
@@ -270,7 +270,7 @@ def print_portfolio_summary(strategy: dict, shares: dict, prices: dict,
     for a in strategy:
         print(f"  {a:<8}: {shares[a]:.0f} shares × €{prices[a]:.2f}"
               f" = €{current_values[a]:,.2f}")
-    print(f"  Cash     : €{cash:,.2f} (side fund — not counted in weights)")
+    print(f"  {'Cash':<8}: €{cash:,.2f} (side fund — not counted in weights)")
     return current_values, total
 
 
