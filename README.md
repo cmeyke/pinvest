@@ -154,8 +154,7 @@ underweighted assets without selling any current shares.
   Bonds    (XGLE): €52.20
   Gold     (EWG2): €121.05
 
-💰 Current Portfolio Value: €27,525.00
-💰 Including Cash:           €27,525.00
+💰 Current Portfolio Value: €27,525.00, incl. Cash: €27,525.00
   Equity  : 150 shares × €105.50 = €15,825.00
   Bonds   : 85 shares × €52.20 = €4,437.00
   Gold    : 60 shares × €121.05 = €7,263.00
@@ -189,8 +188,7 @@ evaluates current weights and only triggers actionable trades when a 20%
 relative band has been breached.
 
 ```text
-💰 Current Portfolio Value: €27,525.00
-💰 Including Cash:           €27,525.00
+💰 Current Portfolio Value: €27,525.00, incl. Cash: €27,525.00
   Equity  : 150 shares × €105.50 = €15,825.00
   Bonds   : 85 shares × €52.20 = €4,437.00
   Gold    : 60 shares × €121.05 = €7,263.00
